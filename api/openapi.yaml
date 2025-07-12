@@ -1,0 +1,171 @@
+openapi: 3.0.3
+info:
+  title: 彩票后台管理 API
+  version: "1.0.0"
+  description: 店主管理购买彩票方案、订单、开奖查询的后端接口文档
+
+servers:
+  - url: http://localhost:8080/api
+
+paths:
+  /schemes:
+    get:
+      summary: 获取所有彩票方案
+      responses:
+        '200':
+          description: 方案列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Scheme'
+    post:
+      summary: 新增彩票方案
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewScheme'
+      responses:
+        '200':
+          description: 新增成功返回
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /schemes/{id}:
+    delete:
+      summary: 删除指定彩票方案
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /orders:
+    get:
+      summary: 获取所有订单
+      responses:
+        '200':
+          description: 订单列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Order'
+    post:
+      summary: 创建订单
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewOrder'
+      responses:
+        '200':
+          description: 订单创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /results/check:
+    post:
+      summary: 查询中奖情况
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DrawNumbers'
+      responses:
+        '200':
+          description: 返回中奖订单列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Winner'
+
+components:
+  schemas:
+    Scheme:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        numbers:
+          type: string
+    NewScheme:
+      type: object
+      required:
+        - name
+        - numbers
+      properties:
+        name:
+          type: string
+        numbers:
+          type: string
+    Order:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        scheme_name:
+          type: string
+        price:
+          type: number
+        created_at:
+          type: string
+          format: date-time
+    NewOrder:
+      type: object
+      required:
+        - username
+        - scheme_id
+        - price
+      properties:
+        username:
+          type: string
+        scheme_id:
+          type: integer
+        price:
+          type: number
+    DrawNumbers:
+      type: object
+      required:
+        - numbers
+      properties:
+        numbers:
+          type: string
+    Winner:
+      type: object
+      properties:
+        order_id:
+          type: integer
+        username:
+          type: string
+        price:
+          type: number
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
