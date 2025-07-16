@@ -1,9 +1,13 @@
 package schemes
 
-import "github.com/gin-gonic/gin"
+import (
+	"database/sql"
 
-func RegisterHandlers(router *gin.Engine) {
-	router.GET("/schemes", GetAllSchemes)
-	router.POST("/schemes", CreateScheme)
-	router.DELETE("/schemes/:id", DeleteScheme)
+	"github.com/gin-gonic/gin"
+)
+
+func RegisterHandlers(db *sql.DB, router *gin.Engine) {
+	router.GET("/schemes", GetAllSchemesWrapper(db))
+	router.POST("/schemes", CreateSchemeWrapper(db))
+	router.DELETE("/schemes/:id", DeleteSchemeWrapper(db))
 }
