@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"lottery/cmd/server/schemes"
 
 	"github.com/gin-gonic/gin"
@@ -8,6 +9,7 @@ import (
 
 func RunServer(addr string) error {
 	router := gin.Default()
-	schemes.RegisterHandlers(router)
+	var db *sql.DB
+	schemes.RegisterHandlers(db, router)
 	return router.Run(addr)
 }

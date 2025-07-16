@@ -1,12 +1,28 @@
 package schemes
 
-import "github.com/gin-gonic/gin"
+import (
+	"database/sql"
+	"lottery/cmd/pkg/db"
+	"strconv"
 
-func DeleteScheme(ctx *gin.Context) {
-	// This function will handle the deletion of a scheme.
-	// The implementation will depend on your application's requirements.
-	// For now, we can return a placeholder response.
-	ctx.JSON(200, gin.H{
-		"message": "Scheme deleted successfully",
-	})
+	"github.com/gin-gonic/gin"
+)
+
+func DeleteSchemeWrapper(d *sql.DB) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		// Extract the scheme ID from the request parameters
+		id := ctx.Param("id")
+		schemeID, err := strconv.Atoi(id)
+		if err != nil {
+			ctx.JSON(400, gin.H{"error": "Invalid scheme ID"})
+			return
+		}
+		// Call the DeleteScheme function to handle the deletion logic
+		if err = db.DeleteScheme(d, schemeID); err != nil {
+			ctx.JSON(500, gin.H{"error": "Failed to delete scheme"})
+			return
+		}
+
+		ctx.JSON(200, gin.H{"message": "Scheme deleted successfully"})
+	}
 }
