@@ -7,8 +7,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func GetAllSchemes(ctx *gin.Context) {}
-
 func GetAllSchemesWrapper(d *sql.DB) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		// Call the GetAllSchemes function to handle the logic of retrieving all schemes
