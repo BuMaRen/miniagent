@@ -1,6 +1,8 @@
 package results
 
-import "github.com/gin-gonic/gin"
+import (
+	"github.com/gin-gonic/gin"
+)
 
 func QueryResults(ctx *gin.Context) {
 	// Placeholder function for querying results

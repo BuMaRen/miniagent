@@ -1,8 +1,19 @@
 package orders
 
-import "github.com/gin-gonic/gin"
+import (
+	"database/sql"
+	"lottery/cmd/pkg/db"
 
-func GetAllOrders(c *gin.Context) {
-	// Logic to retrieve all orders
-	c.JSON(200, gin.H{"message": "List of all orders"})
+	"github.com/gin-gonic/gin"
+)
+
+func GetAllOrdersWrapper(d *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		orders, err := db.GetAllOrders(d)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to retrieve orders"})
+			return
+		}
+		c.JSON(200, gin.H{"orders": orders})
+	}
 }

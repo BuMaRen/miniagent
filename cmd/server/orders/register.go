@@ -1,8 +1,12 @@
 package orders
 
-import "github.com/gin-gonic/gin"
+import (
+	"database/sql"
 
-func RegisterHandlers(router *gin.Engine) {
-	router.GET("/orders", GetAllOrders)
-	router.POST("/orders", CreateOrders)
+	"github.com/gin-gonic/gin"
+)
+
+func RegisterHandlers(db *sql.DB, router *gin.Engine) {
+	router.GET("/orders", GetAllOrdersWrapper(db))
+	router.POST("/orders", CreateOrdersWrapper(db))
 }
