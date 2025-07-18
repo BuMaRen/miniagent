@@ -9,7 +9,7 @@ type Order struct {
 }
 
 type NewOrder struct {
-	UserName string `json:"username"`
-	SchemeId int    `json:"scheme_id"`
-	Price    int    `json:"price"`
+	UserName   string `json:"username"`
+	SchemeName string `json:"scheme_name"`
+	Price      int    `json:"price"`
 }

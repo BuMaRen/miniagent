@@ -3,8 +3,8 @@ package server
 import (
 	"database/sql"
 	"fmt"
-	"os"
 
+	_ "github.com/go-sql-driver/mysql" // MySQL driver for database/sql
 	"github.com/spf13/cobra"
 )
 
@@ -31,6 +31,5 @@ func (cfg *ServerConfig) FlagsSet(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&cfg.Addr, "addr", ":8080", "Server address to listen on")
 	if err := cmd.MarkFlagRequired("dsn"); err != nil {
 		fmt.Println("Error marking dsn flag as required:", err)
-		os.Exit(1) // Exit if the DSN flag is not set
 	}
 }

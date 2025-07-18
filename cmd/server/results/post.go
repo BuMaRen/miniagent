@@ -1,14 +1,35 @@
 package results
 
 import (
+	"database/sql"
+	"lottery/cmd/pkg/db"
+	"lottery/pkg/schemas"
+	"strconv"
+
 	"github.com/gin-gonic/gin"
 )
 
-func QueryResults(ctx *gin.Context) {
-	// Placeholder function for querying results
-	// This function will handle the logic for querying results based on the request context
-	// You can implement the actual logic here to interact with your database or data source
-	ctx.JSON(200, gin.H{
-		"message": "Query results endpoint is not implemented yet",
-	})
+func QueryResultsWrapper(d *sql.DB) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		numbers := &schemas.DrawNumbers{}
+		if err := ctx.ShouldBindJSON(numbers); err != nil {
+			ctx.JSON(400, gin.H{"error": "Invalid input"})
+			return
+		}
+		number, err := strconv.Atoi(numbers.Numbers)
+		if err != nil {
+			ctx.JSON(400, gin.H{"error": "Invalid number format"})
+			return
+		}
+		winners, err := db.QueryResults(d, number)
+		if err != nil {
+			ctx.JSON(500, gin.H{"error": "Failed to query results"})
+			return
+		}
+		if len(winners) == 0 {
+			ctx.JSON(404, gin.H{"message": "No winners found"})
+			return
+		}
+		ctx.JSON(200, winners)
+	}
 }

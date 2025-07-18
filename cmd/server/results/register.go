@@ -1,7 +1,11 @@
 package results
 
-import "github.com/gin-gonic/gin"
+import (
+	"database/sql"
 
-func RegisterHandler(router *gin.Engine) {
-	router.POST("/results/check", QueryResults)
+	"github.com/gin-gonic/gin"
+)
+
+func RegisterHandler(db *sql.DB, router *gin.Engine) {
+	router.POST("/results/check", QueryResultsWrapper(db))
 }
