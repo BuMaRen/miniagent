@@ -9,7 +9,7 @@ func CreateOrdersTable(db *sql.DB) error {
 	sqlStr := `CREATE TABLE IF NOT EXISTS orders (
   id INT PRIMARY KEY AUTO_INCREMENT,
   username VARCHAR(255),
-  scheme_id INT,
+  scheme_name VARCHAR(255),
   price INT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`
@@ -39,8 +39,8 @@ func GetAllOrders(db *sql.DB) ([]schemas.Order, error) {
 }
 
 func CreateOrder(db *sql.DB, order *schemas.NewOrder) error {
-	sqlStr := `INSERT INTO orders (username, scheme_id, price) VALUES (?, ?, ?)`
-	_, err := db.Exec(sqlStr, order.UserName, order.SchemeId, order.Price)
+	sqlStr := `INSERT INTO orders (username, scheme_name, price) VALUES (?, ?, ?)`
+	_, err := db.Exec(sqlStr, order.UserName, order.SchemeName, order.Price)
 	if err != nil {
 		return err // Handle error appropriately in production code
 	}

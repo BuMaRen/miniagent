@@ -2,6 +2,7 @@ package server
 
 import (
 	"lottery/cmd/server/orders"
+	"lottery/cmd/server/results"
 	"lottery/cmd/server/schemes"
 
 	"github.com/gin-gonic/gin"
@@ -15,5 +16,6 @@ func RunServer(cfg *ServerConfig) error {
 	}
 	schemes.RegisterHandlers(cfg.connection, router)
 	orders.RegisterHandlers(cfg.connection, router)
+	results.RegisterHandler(cfg.connection, router)
 	return router.Run(cfg.Addr)
 }

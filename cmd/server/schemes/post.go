@@ -13,12 +13,12 @@ func CreateSchemeWrapper(d *sql.DB) gin.HandlerFunc {
 		newScheme := &schemas.NewScheme{}
 		// Bind the incoming JSON request to the variables
 		if err := ctx.ShouldBindJSON(newScheme); err != nil {
-			ctx.JSON(400, gin.H{"error": "Invalid input data"})
+			ctx.JSON(400, gin.H{"error": err.Error()})
 		}
 
 		// Call the CreateScheme function to handle the creation logic
 		if err := db.InsertScheme(d, newScheme.Name, newScheme.Numbers); err != nil {
-			ctx.JSON(500, gin.H{"error": "Failed to create scheme"})
+			ctx.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
 

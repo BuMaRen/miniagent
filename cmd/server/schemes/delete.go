@@ -19,7 +19,7 @@ func DeleteSchemeWrapper(d *sql.DB) gin.HandlerFunc {
 		}
 		// Call the DeleteScheme function to handle the deletion logic
 		if err = db.DeleteScheme(d, schemeID); err != nil {
-			ctx.JSON(500, gin.H{"error": "Failed to delete scheme"})
+			ctx.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
 
