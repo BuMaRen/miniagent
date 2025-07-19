@@ -16,6 +16,19 @@ import (
 	slog "github.com/stainton/logger"
 )
 
+func cors() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	}
+}
+
 // TODO: 将gin的日志导出到我的日志文件里面
 func RunServer(cfg *ServerConfig) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -29,6 +42,7 @@ func RunServer(cfg *ServerConfig) {
 		return
 	}
 	router := gin.Default()
+	router.Use(cors())
 	schemes.RegisterHandlers(slogger, cfg.connection, router)
 	orders.RegisterHandlers(slogger, cfg.connection, router)
 	results.RegisterHandler(slogger, cfg.connection, router)

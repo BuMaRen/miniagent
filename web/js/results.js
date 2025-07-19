@@ -1,3 +1,5 @@
+const apiBase = 'http://localhost:9090';
+
 function checkResults() {
   const numbers = document.getElementById("drawNumbers").value;
   axios.post(`${apiBase}/results/check`, { numbers })

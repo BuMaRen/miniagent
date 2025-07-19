@@ -1,4 +1,4 @@
-const apiBase = 'http://localhost:8080/api';
+const apiBase = 'http://localhost:9090';
 
 // 获取方案列表
 function loadSchemes() {
