@@ -8,7 +8,7 @@ import (
 )
 
 func QueryResults(db *sql.DB, number int) ([]*schemas.Winner, error) {
-	sqlStr := `SELECT name FROM schemes WHERE numbers LIKE ?`
+	sqlStr := fmt.Sprintf("SELECT name FROM schemes WHERE numbers LIKE '%% %d %%' OR numbers LIKE '%d %%' OR numbers LIKE '%% %d' OR numbers = '%d'", number, number, number, number)
 	rows, err := db.Query(sqlStr)
 	if err != nil {
 		return nil, err
@@ -16,7 +16,7 @@ func QueryResults(db *sql.DB, number int) ([]*schemas.Winner, error) {
 	// 获取所有的中奖方案
 	schemasList := []any{}
 	for rows.Next() {
-		var scheme int
+		var scheme string
 		if err := rows.Scan(&scheme); err != nil {
 			return nil, err
 		}
@@ -35,7 +35,7 @@ func QueryResults(db *sql.DB, number int) ([]*schemas.Winner, error) {
 	var orders []*schemas.Winner
 	for rows.Next() {
 		order := &schemas.Winner{}
-		if err := rows.Scan(order.OrderId, order.UserName, order.SchemeName, order.Price, order.CreateAt); err != nil {
+		if err := rows.Scan(&order.OrderId, &order.UserName, &order.SchemeName, &order.Price, &order.CreateAt); err != nil {
 			return nil, err
 		}
 		orders = append(orders, order)
