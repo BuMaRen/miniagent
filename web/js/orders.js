@@ -1,3 +1,5 @@
+const apiBase = 'http://localhost:9090';
+
 // 获取方案列表
 function loadSchemes() {
   axios.get(`${apiBase}/schemes`)
@@ -33,7 +35,7 @@ function loadOrders() {
     <td>${item.username}</td>
     <td>${item.scheme_name}</td>
     <td>${item.price}</td>
-    <td>${item.created_at}</td>
+    <td>${item.create_at}</td>
   </tr>`
       ).join("");
     });

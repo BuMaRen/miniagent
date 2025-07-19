@@ -16,6 +16,6 @@ func GetAllOrdersWrapper(logger slog.Logger, d *sql.DB) gin.HandlerFunc {
 			c.JSON(500, gin.H{"error": "Failed to retrieve orders"})
 			return
 		}
-		c.JSON(200, gin.H{"orders": orders})
+		c.JSON(200, orders)
 	}
 }
