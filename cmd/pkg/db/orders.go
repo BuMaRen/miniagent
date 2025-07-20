@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"lottery/pkg/schemas"
 )
 
@@ -45,4 +46,22 @@ func CreateOrder(db *sql.DB, order *schemas.NewOrder) error {
 		return err // Handle error appropriately in production code
 	}
 	return nil
+}
+
+func GetOrderWithNumberInScheme(db *sql.DB, number string) ([]*schemas.Winner, error) {
+	sqlStr := fmt.Sprintf("SELECT id, username, scheme_name, price, created_at FROM orders WHERE scheme_name LIKE '%% %s %%' OR scheme_name LIKE '%s %%' OR scheme_name LIKE '%% %s' OR scheme_name = '%s'", number, number, number, number)
+	rows, err := db.Query(sqlStr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var orders []*schemas.Winner
+	for rows.Next() {
+		order := &schemas.Winner{}
+		if err := rows.Scan(&order.OrderId, &order.UserName, &order.SchemeName, &order.Price, &order.CreateAt); err != nil {
+			return nil, err
+		}
+		orders = append(orders, order)
+	}
+	return orders, nil
 }

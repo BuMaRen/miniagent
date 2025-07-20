@@ -6,18 +6,35 @@ function loadSchemes() {
     .then(res => {
       const select = document.getElementById("schemeSelect");
       select.innerHTML = res.data.map(item =>
-        `<option value="${item.id}">${item.name}</option>`
+        `<option value="${item.name}">${item.name}</option>`
       ).join("");
+
+      // 添加“自选”选项
+      const customOption = document.createElement("option");
+      customOption.value = "__custom__";
+      customOption.textContent = "自选";
+      select.appendChild(customOption);
     });
 }
 
 // 创建订单
 function createOrder() {
   const username = document.getElementById("username").value;
-  const schemeId = document.getElementById("schemeSelect").value;
-  const price = document.getElementById("price").value;
+  const price = parseInt(document.getElementById("price").value, 10);
+  const selectedScheme = document.getElementById("schemeSelect").value;
 
-  axios.post(`${apiBase}/orders`, { username, scheme_id: schemeId, price })
+  let schemeName = selectedScheme;
+  if (selectedScheme === "__custom__") {
+    const customInput = document.getElementById("customNumber");
+    const customValue = customInput.value.trim();
+    if (!customValue) {
+      alert("请输入自选号码");
+      return;
+    }
+    schemeName = customValue;
+  }
+
+  axios.post(`${apiBase}/orders`, { username: username, scheme_name: schemeName, price: price })
     .then(() => {
       loadOrders();
       alert("下单成功");
@@ -41,7 +58,22 @@ function loadOrders() {
     });
 }
 
+// 显示/隐藏自选号码输入框
+function setupSchemeSelectListener() {
+  const schemeSelect = document.getElementById("schemeSelect");
+  const customInput = document.getElementById("customNumber");
+
+  schemeSelect.addEventListener("change", () => {
+    if (schemeSelect.value === "__custom__") {
+      customInput.style.display = "block";
+    } else {
+      customInput.style.display = "none";
+    }
+  });
+}
+
 window.onload = () => {
   loadSchemes();
   loadOrders();
+  setupSchemeSelectListener();
 };
