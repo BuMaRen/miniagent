@@ -41,6 +41,9 @@ func StartTaskWithContext(root context.Context, c *gin.Context, sm *sync.Map) {
 				time.Sleep(time.Second)
 				// Simulate task work
 			}
+			if i == req.SleepTime-1 {
+				fmt.Printf("[%v-%v]任务完成\n", req.TaskId, req.TaskName)
+			}
 		}
 	}()
 }
