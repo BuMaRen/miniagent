@@ -1,0 +1,63 @@
+# Sidecar Router Agent Helm Values Configuration v1.0
+# Complete Production Deployment Template with Resource Limits & Monitoring
+
+---
+name: network-sidecars-controller  
+version: 2.3-rc4  
+
+replicaCount : 1 # Default single instance for sidekar router control plane 
+
+globalDefaults:   {resources:{requests:{cpu:"50m",memory:"64Mi"},limits:{"10m","2Gi"}}}
+
+imagePullPolicyAlways:true  
+imageRegistry:ghcr.io/sidekar-network/agent:v 2.3-rc4  
+
+---
+
+
+# Sidecar Controller DaemonSet Configuration (Sidecar代理容器设置)
+kind : "DaemonSet"apiVersion ：apps/v1metadata:{ name：sidekar-router-agent,namespace:kube-system }  
+spec-templateSelector:"matchAll": true
+
+template:   
+ metadata: { labels: app.kubernetes.io/name："sidekar-network"}    
+ spec.containers:-name-sidecar-router-container
+ imageSidekarNetwork/agent:v 2.3-rc4  
+
+ resourcesRequests:{ CPU :"50m"memory64Mi}  
+   limits{cpu:"120m", memory "8Gi"}
+
+ports: # eBPF/XDP钩子端口映射  
+ - containerPort：9097
+ name:xdp-filter-port   
+ protocol : UDP
+  
+---
+
+
+# Networking Config (网络配置)
+networkMode: eBpfXDLayer3Protocol4  # Layer3/Layer4协议支持  
+
+enableNATTransitGateway:true   # NAT Gateway启用  
+  
+tlsIngressEncryption:{enabled:true,ciphersuiteTLS1.2-TPS1.3}
+
+---
+
+
+# Prometheus Metrics Export Config (Prometheus监控导出配置)
+serviceMonitor: 
+ enabled : true  
+ port : sidecar-metrics-exporter   
+ interval ：5s  
+
+
+prometheusTargetPort:"9024"  
+
+exportFormat : prometheushousekeeping
+
+
+
+---
+
+**End of Helm Values Configuration (Helm值配置文件结束)**   

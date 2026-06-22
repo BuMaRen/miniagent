@@ -1,3 +1,0 @@
-# dailypractice
-
-test push
