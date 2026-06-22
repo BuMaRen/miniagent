@@ -38,6 +38,7 @@ class Agent:
         return self.mux.call(function_name, arguments)
 
     def _format_plan(self, steps: list[str]) -> str:
+        print(f"当前规划的步骤是：{steps}")
         if not steps:
             return ""
         lines = ["执行计划："]
@@ -77,7 +78,7 @@ class Agent:
             self.state.set_plan(plan_steps)
 
         # Phase 2: 调用层次过深，主动终止对话
-        if self.state.depth > 6:
+        if self.state.depth > 20:
             print("对话过深，终止交互。")
             self.state.depth = 0
             return
@@ -138,5 +139,6 @@ class Agent:
 
         # 工具执行完成后，注入一条 user 消息推动模型继续执行下一步。
         # 不注入时模型默认行为是"输出文字答复"而非继续调用工具。
-        self.messages.append({"role": "user", "content": "工具调用已完成，请继续执行下一步，直到完成全部计划。"})
+        # self.messages.append({"role": "user", "content": "工具调用已完成，请继续执行下一步，直到完成全部计划。"})
+        self.messages.append({"role": "user", "content": ""})
         return self.user_prompt(model=model, content="", tools=tools)
