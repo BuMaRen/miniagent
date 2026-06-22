@@ -1,0 +1,60 @@
+# ServiceMeshRouterConfig API Specification v1.0
+# Kubernetes CRD Definition for Sidecar Routing System
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: servicemeshrouterconfigs
+spec:
+  group: sidekar.network  
+  versions:
+    - version: v1alpha1
+      served: true
+      storage: false
+    
+---
+
+# Network Router CRD Schema (路由网络控制器CRD)
+apiVersion: extensions.k8s.io/v1beta4
+kind: SidecarRouterConfigSpec
+
+metadata:
+  name: "default-routing-rules"
+spec:
+  serviceSelectorFields: # Pod服务选择器定义  
+    matchExpressions: []  
+      - keyNamespace: kubernetes.service-name
+        operatorEqualValues:"app-frontend"  
+
+    routingRulesType: ["matchAll", "matchHost"]    
+   hostnames: 
+     value: example.com  
+     
+portsList:[# 端口列表配置]
+  portValue1: {protocol="TCP",portNumber=443}  
+   
+tlsEncryptionSpec: # TLS加密参数定义      
+    tlsCertHashBase64: bYJv...  
+   minTLSVersion:"1.2"      
+
+---
+
+## Service Discovery & Routing Decision Logic (服务发现与路由决策逻辑)
+# 实现基于Service Endpoints的动态路由匹配算法  
+
+```go type EndpointCacheEntry struct {     PodIP string       // Pod IP地址    
+    Port int64        # 端口号      NodeRef corev1.NodeReference // 节点引用     
+} func GenerateRoutingPolicy(endpointList []EndpointCacheEntry) routingPolicy{
+   if len(endpointList) == 0 { return defaultDnsFallback() } 
+    policy.ruleType = buildDecisionLogicFromEndpoints(  
+       endpointList, config.hostnames   
+       
+      )  
+      
+return newRouteTable(policy.hashString)"
+} # Policy Update Frequency：1-5 seconds based on changes
+
+---
+
+**End of API Specification (API规格文档结束)**   
