@@ -17,3 +17,27 @@
 #     - message: Message           # assistant 消息
 #     - finish_reason: str         # "stop" | "tool_calls" | "length" | ...
 #     - usage: dict | None         # token 用量统计（可选）
+
+from pydantic.dataclasses import dataclass
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: str  # JSON 字符串
+
+
+@dataclass
+class Message:
+    role: str
+    content: str | None = None
+    tool_calls: list["ToolCall"] | None = None
+    tool_call_id: str | None = None
+
+
+@dataclass
+class LLMResponse:
+    message: Message
+    finish_reason: str
+    usage: dict | None = None

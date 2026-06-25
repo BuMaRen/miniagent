@@ -12,3 +12,15 @@
 #
 # 不应包含：
 #   - 任何工具的具体实现逻辑（放在 tools/builtin/ 下）
+
+class ToolExecutor:
+    
+    def execute(self, tool_call):
+        """
+        执行工具调用。
+        """
+        # 1. 从 ToolRegistry 查找对应函数和 schema
+        # 2. 解析 arguments（JSON 字符串 -> dict）
+        # 3. 调用函数，捕获异常
+        # 4. 将返回值序列化为字符串并返回
+        pass
