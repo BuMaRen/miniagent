@@ -12,3 +12,42 @@
 #
 # 注意：
 #   - 工具名重复注册时应抛出明确异常，避免静默覆盖
+
+from dataclasses import dataclass
+
+from tools.schema import ToolSchema
+
+
+@dataclass
+class FuncTuple:
+    func: callable
+    schema: ToolSchema
+
+
+@dataclass
+class ToolRegistry:
+
+    registry: dict
+
+    def register(self, name: str, func: callable, schema: ToolSchema):
+        """
+        注册一个工具。
+        """
+        if name in self.registry:
+            raise ValueError(f"Tool '{name}' is already registered.")
+        self.registry[name] = FuncTuple(func, schema)
+
+    def get(self, name: str):
+        """
+        按名称查找工具，返回 (func, schema)。
+        """
+        if name not in self.registry:
+            raise KeyError(f"Tool '{name}' is not registered.")
+        func_tuple = self.registry[name]
+        return func_tuple.func, func_tuple.schema
+
+    def schemas(self):
+        """
+        返回所有注册工具的 Schema 列表。
+        """
+        return [func_tuple.schema for func_tuple in self.registry.values()]
