@@ -13,11 +13,14 @@
 #   - 超时控制（从 AgentConfig 读取）
 #   - 请求/响应日志（DEBUG 级别）
 
-from llm.base.message import LLMResponse, Message
-from tools.schema import ToolSchema
+from llm.data.message import LLMResponse, Message
+from tools import ToolSchema
 
 
 class LLMClient:
+
+    def __init__(self):
+        self.messages = list[Message]()
 
     def chat(
         self, messages: list[Message], tools: list[ToolSchema] | None = None
@@ -27,14 +30,39 @@ class LLMClient:
         """
         # 构建 provider 请求
         request = self._build_request(messages, tools)
-
         # 发送请求并获取原始响应
         raw_response = self._send_request(request)
-
         # 解析原始响应为标准化 LLMResponse
-        response = self._parse_response(raw_response)
+        return self._parse_response(raw_response)
 
-        return response
+        # resp = self._parse_response(raw_response)
+        # if not isinstance(resp, LLMResponse):
+        #     raise ValueError(
+        #         f"LLMClient subclass must return LLMResponse, got {type(resp)}"
+        #     )
+        # if resp.finish_reason == "length":
+        #     print("[WARNING] LLM response truncated due to length limit.")
+        #     return resp
+        # elif resp.finish_reason == "content_filter":
+        #     print("[WARNING] LLM response blocked by content filter.")
+        #     return resp
+        # elif resp.finish_reason == "stop":
+        #     print("Answer:\n" + resp.message.content)
+        #     self.messages.append(resp.message)
+        #     return resp
+        # # 拼接工具调用请求
+        # self.messages.append(resp.message)
+        # # 调用工具，将结果拼接到 messages 中，继续对话
+        # for call in resp.message.tool_calls or []:
+        #     tool_resp = self.tool_executor.execute(call)
+        #     self.messages.append(
+        #         Message(
+        #             role="tool",
+        #             content=tool_resp,
+        #             tool_call_id=call.id,
+        #         )
+        #     )
+        # return self.chat(self.messages, tools)
 
     def _send_request(self, request):
         """
