@@ -5,29 +5,31 @@
 #   - get(name) -> (func, schema)   按名称查找工具
 #   - schemas() -> list[ToolSchema] 返回所有注册工具的 Schema 列表，供 LLM 调用时传入
 #
-# 提供 @tool 装饰器（在此文件或 __init__.py 中定义）：
-#   - 用法：@registry.tool 或 @tool（全局默认注册表）
-#   - 自动调用 schema_from_func 生成 Schema 并注册
-#   - 装饰后函数行为不变，仍可直接调用
-#
 # 注意：
 #   - 工具名重复注册时应抛出明确异常，避免静默覆盖
 
-from dataclasses import dataclass
-
-from tools.schema import ToolSchema
+from .schema import ToolSchema
 
 
-@dataclass
 class FuncTuple:
-    func: callable
-    schema: ToolSchema
+
+    def __init__(self, func: callable, schema: ToolSchema):
+        self._func = func
+        self._schema = schema
+
+    @property
+    def func(self):
+        return self._func
+
+    @property
+    def schema(self):
+        return self._schema
 
 
-@dataclass
 class ToolRegistry:
 
-    registry: dict
+    def __init__(self):
+        self.registry = dict()
 
     def register(self, name: str, func: callable, schema: ToolSchema):
         """
