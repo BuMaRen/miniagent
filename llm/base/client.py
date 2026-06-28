@@ -23,16 +23,14 @@ class LLMClient:
         self.messages = list[Message]()
 
     def chat(
-        self, messages: list[Message], tools: list[ToolSchema] | None = None
+        self, messages: list[Message], tools: list[ToolSchema] | None = None, model: str = ""
     ) -> LLMResponse:
         """
         发送对话请求，返回标准化响应（不暴露 provider 原始对象）
         """
-        # 构建 provider 请求
         request = self._build_request(messages, tools)
-        # 发送请求并获取原始响应
+        request["model"] = model
         raw_response = self._send_request(request)
-        # 解析原始响应为标准化 LLMResponse
         return self._parse_response(raw_response)
 
         # resp = self._parse_response(raw_response)
@@ -40,28 +38,8 @@ class LLMClient:
         #     raise ValueError(
         #         f"LLMClient subclass must return LLMResponse, got {type(resp)}"
         #     )
-        # if resp.finish_reason == "length":
-        #     print("[WARNING] LLM response truncated due to length limit.")
-        #     return resp
-        # elif resp.finish_reason == "content_filter":
-        #     print("[WARNING] LLM response blocked by content filter.")
-        #     return resp
-        # elif resp.finish_reason == "stop":
-        #     print("Answer:\n" + resp.message.content)
-        #     self.messages.append(resp.message)
-        #     return resp
-        # # 拼接工具调用请求
-        # self.messages.append(resp.message)
-        # # 调用工具，将结果拼接到 messages 中，继续对话
-        # for call in resp.message.tool_calls or []:
-        #     tool_resp = self.tool_executor.execute(call)
-        #     self.messages.append(
-        #         Message(
-        #             role="tool",
-        #             content=tool_resp,
-        #             tool_call_id=call.id,
-        #         )
-        #     )
+        
+        
         # return self.chat(self.messages, tools)
 
     def _send_request(self, request):
