@@ -1,7 +1,5 @@
 from llm.data.message import Message
 from tools.schema import ToolCall
-from openai import NOT_GIVEN
-
 
 def construct_messages(msg: Message) -> dict:
     if msg.role == "user":
@@ -45,7 +43,7 @@ def assistant_message(content: str | list, tool_calls: list[ToolCall] = None) ->
         "role": "assistant",
         "content": content,
     }
-    if tool_calls is not NOT_GIVEN:
+    if tool_calls:
         msg["tool_calls"] = [
             {
                 "id": call.id,
@@ -55,7 +53,7 @@ def assistant_message(content: str | list, tool_calls: list[ToolCall] = None) ->
                     "arguments": call.arguments,
                 },
             }
-            for call in (tool_calls or [])
+            for call in tool_calls
         ]
     return msg
 
@@ -82,7 +80,7 @@ def choice_to_message(choice: dict) -> Message:
                 name=call["function"]["name"],
                 arguments=call["function"]["arguments"],
             )
-            for call in msg.get("tool_calls", [])
+            for call in msg.get("tool_calls") or []
         ],
         tool_call_id=msg.get("tool_call_id"),
     )

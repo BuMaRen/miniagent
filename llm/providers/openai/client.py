@@ -14,8 +14,6 @@
 #   - 从 openai ChatCompletion 对象中提取 Message、finish_reason、usage
 #   - 统一转换为框架内部的 LLMResponse
 
-import json
-
 from llm.data.message import Message, LLMResponse
 from llm.base.client import LLMClient
 from tools.schema import ToolSchema
@@ -27,14 +25,14 @@ from .msgs import construct_messages, choice_to_message
 class OpenAIClient(LLMClient):
 
     def __init__(self, api_key: str, base_url: str | None = None):
+        super().__init__()
         self._client = OpenAI(base_url=base_url, api_key=api_key)
 
     def _send_request(self, request):
         """
         发送请求到 OpenAI（只负责发送这个动作），并返回原始响应。
         """
-        response = self._client.chat.completions.create(**request)
-        return response
+        return self._client.chat.completions.create(**request)
 
     def _build_request(self, messages: list[Message], tools: list[ToolSchema] | None):
         """
@@ -52,11 +50,11 @@ class OpenAIClient(LLMClient):
         return request
 
     def _parse_response(self, raw_response) -> LLMResponse:
-        mp = json.loads(raw_response)
+        mp = raw_response.model_dump()
         choice = mp["choices"][0]
         return LLMResponse(
             message=choice_to_message(choice),
-            finish_reason=choice.get("finish_reason", ""),
+            finish_reason=choice.get("finish_reason") or "",
             usage=mp.get("usage", dict()),
         )
 

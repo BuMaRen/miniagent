@@ -10,3 +10,27 @@
 #   - 任何与具体 LLM provider 耦合的代码
 #   - loop 控制流逻辑（放在 loop.py）
 #   - 工具执行逻辑（放在 tools/executor.py）
+
+class BaseAgent:
+    def __init__(self, llm_client, tool_registry, memory, planner, agent_state):
+        self.llm_client = llm_client
+        self.tool_registry = tool_registry
+        self.memory = memory
+        self.planner = planner
+        self.agent_state = agent_state
+
+    def run(self, user_input: str):
+        # 入口方法，委托给 AgentLoop 执行
+        pass
+
+    def install_tool(self, name: str, func):
+        # 动态注册工具
+        self.tool_registry.register(name, func)
+
+    def on_before_tool(self, tool_name: str):
+        # 可选重写的 hook，在工具执行前调用
+        pass
+
+    def on_after_tool(self, tool_name: str):
+        # 可选重写的 hook，在工具执行后调用
+        pass
