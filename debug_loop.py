@@ -14,6 +14,8 @@
 import os
 import sys
 
+from memory.context import ConversationContext
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from llm.providers.openai.client import OpenAIClient
@@ -25,39 +27,35 @@ from core.loop import agent_loop
 
 
 def main():
-    # api_key = os.environ.get("OPENAI_API_KEY", "")
-    # base_url = os.environ.get("OPENAI_BASE_URL") or None
-    # model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     api_key = "ollama"
-    base_url = "http://localhost:11434/v1"
-    model = "qwen3.5:2b"
+    base_url = "http://192.168.50.11:11434/v1"
+    model = "qwen3:14b"
+    
+    
 
     if not api_key:
         print("Error: OPENAI_API_KEY is not set.")
         sys.exit(1)
 
-    client = OpenAIClient(api_key=api_key, base_url=base_url)
-    client.messages.append(Message(
-        role="system",
-        content="You are a helpful assistant. Use the provided file system tools to answer the user's question.",
-    ))
+    client = OpenAIClient(api_key=api_key, base_url=base_url, model=model)
 
     registry = ToolRegistry()
     for func, schema in fs_tools:
         registry.register(schema.name, func, schema)
-
     executor = ToolExecutor(registry)
 
     prompt = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else (
-        f"请列出 {os.getcwd()} 目录下的内容，判断是否有名为 main.py 的文件。"
+        f"Create a Python file in the {os.getcwd()}/output directory and implement a merge sort algorithm in it."
     )
-
     print(f"Model   : {model}")
     print(f"Tools   : {[s.name for s in registry.schemas()]}")
     print(f"Prompt  : {prompt}")
     print("-" * 60)
 
-    agent_loop(client, prompt, registry.schemas(), executor, model=model)
+    ctx = ConversationContext(client, system_prompt="You are a software development expert. Use the provided file system tools to write content to the file system whenever necessary.")
+    
+    ctx.append(Message(role="user", content=prompt))
+    agent_loop(client, registry.schemas(), executor, ctx)
 
 
 if __name__ == "__main__":

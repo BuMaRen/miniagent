@@ -24,15 +24,19 @@ from .msgs import construct_messages, choice_to_message
 
 class OpenAIClient(LLMClient):
 
-    def __init__(self, api_key: str, base_url: str | None = None):
+    def __init__(self, api_key: str, base_url: str | None, model: str):
         super().__init__()
         self._client = OpenAI(base_url=base_url, api_key=api_key)
+        self.model = model
 
     def _send_request(self, request):
         """
         发送请求到 OpenAI（只负责发送这个动作），并返回原始响应。
         """
-        return self._client.chat.completions.create(**request)
+        request["model"] = self.model
+        debug_resp = self._client.chat.completions.create(**request)
+        print(f"[DEBUG] OpenAI raw response: {debug_resp.model_dump()}")
+        return debug_resp
 
     def _build_request(self, messages: list[Message], tools: list[ToolSchema] | None):
         """

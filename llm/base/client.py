@@ -19,17 +19,13 @@ from tools import ToolSchema
 
 class LLMClient:
 
-    def __init__(self):
-        self.messages = list[Message]()
-
     def chat(
-        self, messages: list[Message], tools: list[ToolSchema] | None = None, model: str = ""
+        self, messages: list[Message], tools: list[ToolSchema] | None
     ) -> LLMResponse:
         """
         发送对话请求，返回标准化响应（不暴露 provider 原始对象）
         """
         request = self._build_request(messages, tools)
-        request["model"] = model
         raw_response = self._send_request(request)
         return self._parse_response(raw_response)
 
@@ -38,8 +34,6 @@ class LLMClient:
         #     raise ValueError(
         #         f"LLMClient subclass must return LLMResponse, got {type(resp)}"
         #     )
-        
-        
         # return self.chat(self.messages, tools)
 
     def _send_request(self, request):

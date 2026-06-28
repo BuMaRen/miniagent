@@ -11,17 +11,41 @@
 #   - loop 控制流逻辑（放在 loop.py）
 #   - 工具执行逻辑（放在 tools/executor.py）
 
+from llm.base.client import LLMClient
+from llm.data.message import Message
+from tools.executor import ToolExecutor
+from tools.registry import ToolRegistry
+
+from memory import ConversationContext
+
+from .loop import agent_loop
+
+
 class BaseAgent:
-    def __init__(self, llm_client, tool_registry, memory, planner, agent_state):
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        tool_registry: ToolRegistry,
+        tool_executor: ToolExecutor,
+        memory: ConversationContext,
+        planner,
+        agent_state,
+    ):
         self.llm_client = llm_client
         self.tool_registry = tool_registry
+        self.tool_executor = tool_executor
         self.memory = memory
         self.planner = planner
         self.agent_state = agent_state
 
     def run(self, user_input: str):
-        # 入口方法，委托给 AgentLoop 执行
-        pass
+        self.memory.append(Message(role="user", content=user_input))
+        agent_loop(
+            self.llm_client,
+            self.tool_registry.schemas(),
+            self.tool_executor,
+            self.memory
+        )
 
     def install_tool(self, name: str, func):
         # 动态注册工具
