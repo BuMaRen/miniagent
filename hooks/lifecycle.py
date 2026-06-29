@@ -20,3 +20,15 @@
 # 实现方式：
 #   - 使用 dataclass，每个字段都是 Callable | None，默认 None
 #   - AgentLoop 在对应时机检查字段是否非 None，非 None 则调用
+
+from dataclasses import dataclass
+
+
+@dataclass
+class LifecycleHooks:
+    on_turn_start: callable | None = None
+    on_turn_end: callable | None = None
+    on_before_tool: callable | None = None
+    on_after_tool: callable | None = None
+    on_llm_request: callable | None = None
+    on_llm_response: callable | None = None

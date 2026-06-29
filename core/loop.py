@@ -23,14 +23,16 @@ def agent_loop(
     client: LLMClient,
     tools: list[ToolSchema],
     executor: ToolExecutor,
-    context: ConversationContext
-):  
+    context: ConversationContext,
+):
     context.summarize_if_needed()
     turn_messages = context.messages().copy()
-    tool_called = False
 
+    # 工具调用过程不记录，上下文只记录单次响应
     for _ in range(10):
-        print(f"[DEBUG] Agent loop iteration {_ + 1}, messages count: {len(turn_messages)}")
+        print(
+            f"[DEBUG] Agent loop iteration {_ + 1}, messages count: {len(turn_messages)}"
+        )
         resp = client.chat(messages=turn_messages, tools=tools)
         if resp.finish_reason == "length":
             print("[WARNING] LLM response truncated due to length/context limit.")
@@ -46,7 +48,6 @@ def agent_loop(
         turn_messages.append(resp.message)
         for call in resp.message.tool_calls or []:
             tool_resp = executor.execute(call)
-            # tool_called = True
             turn_messages.append(
                 Message(
                     role="tool",
