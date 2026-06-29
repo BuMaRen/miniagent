@@ -10,3 +10,16 @@
 #   - timeout: int                 # 单次 LLM 调用超时（秒）
 #
 # 支持从环境变量或 .env 文件加载默认值（通过 python-dotenv）。
+
+
+from dataclasses import dataclass
+
+
+@dataclass
+class AgentConfig:
+    model: str = "gemma4:e4b"
+    max_steps: int = 10
+    system_prompt: str = "You are a helpful assistant."
+    force_continue_prompt: str = ""
+    temperature: float = 0
+    timeout: int = 30

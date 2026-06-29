@@ -12,3 +12,42 @@
 #   - is_complete() -> bool             所有步骤都是 done 状态
 #   - advance(result: str)              将当前步骤标记为 done 并推进到下一步
 #   - format() -> str                   格式化为适合注入 prompt 的字符串
+
+from dataclasses import dataclass
+
+
+@dataclass
+class Step:
+    index: int
+    description: str
+    status: str = "pending"  # pending, running, done, failed
+    result: str | None = None
+
+
+@dataclass
+class Plan:
+    steps: list[Step]
+    current_index: int = 0
+
+    def is_complete(self) -> bool:
+        return all(step.status == "done" for step in self.steps)
+
+    def advance(self, result: str):
+        if self.current_index < len(self.steps):
+            self.steps[self.current_index].status = "done"
+            self.steps[self.current_index].result = result
+            self.current_index += 1
+
+    def format(self) -> str:
+        formatted_steps = []
+        for step in self.steps:
+            status_symbol = {
+                "pending": "[ ]",
+                "running": "[~]",
+                "done": "[x]",
+                "failed": "[!]",
+            }.get(step.status, "[ ]")
+            formatted_steps.append(
+                f"{status_symbol} Step {step.index}: {step.description}"
+            )
+        return "\n".join(formatted_steps)
