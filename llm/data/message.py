@@ -15,7 +15,7 @@
 #     - finish_reason: str         # "stop" | "tool_calls" | "length" | ...
 #     - usage: dict | None         # token 用量统计（可选）
 
-from pydantic.dataclasses import dataclass
+from dataclasses import dataclass
 from tools.schema import ToolCall  # noqa: F401 — re-exported for llm 包内使用
 
 

@@ -17,33 +17,21 @@
 
 import json
 
+from flag.debug import DEBUG_LOG
 from llm.base.client import LLMClient
 from llm.data.message import LLMResponse, Message
 from tools.schema import ToolSchema
 
 from .step import Plan, Step
 
-planner_prompt = """你是一个任务规划器，将用户输入拆解为可执行的步骤列表。
-你的唯一任务是：分析用户的输入，将复杂任务分解成若干有序步骤。
-你的回答必须以'{'开始，以'}'结束，严格遵循 JSON 格式。
+planner_prompt = """你是一个任务规划器，将用户的需求分析拆解成若干个有序的子任务。
 
-【输出格式】
-严格输出 JSON，格式如下：
-{
-  "steps": [
-    "步骤1",
-    "步骤2",
-    ...
-  ]
-}
+## 输出
+输出的内容必须是 JSON，格式如{"steps": ["步骤1", "步骤2", ...]}
 
-【示例】
+### 示例
 输入：帮我对比一下苹果和微软的财报，然后写一封总结邮件发给老板。
-输出：{"steps": ["步骤1", "步骤2", ...]}
-
-输入：计算1+1的和？
-输出：{"steps": ["简单问题无需规划，只返回一个步骤"]}
-"""
+输出：{"steps": ["获取财报", "对比财报", "给老板发邮件"]}"""
 
 
 class Planner:
@@ -79,17 +67,21 @@ class Planner:
         Returns:
             Plan: The generated plan.
         """
-        system_prompt = planner_prompt + f"\n【限制】\n步骤数量不超过 {self.max_steps}\n"
+        system_prompt = planner_prompt + f"\n\n## 限制\n步骤数量不超过 {self.max_steps}\n"
         messages = []
         messages.append(Message(role="system", content=system_prompt))
 
-        user_prompt = f"请分析规划用户输入: {user_input}"
+        user_prompt = user_input
         if context:
-            user_prompt += f"\n可参考的上下文: {context}"
+            messages.append(Message(role="system", content="可参考的上下文信息：\n" + context))    
         messages.append(Message(role="user", content=user_prompt))
 
         response: LLMResponse = self.llm_client.chat(messages, tools=tools)
         response_content = response.message.content
+        
+        if DEBUG_LOG:
+            # 红色字体打印此次消耗的 tokens 数量
+            print(f"\033[31m此次消耗的 tokens 数量: {response.usage}\033[0m")
 
         try:
             steps = json.loads(response_content)  # 验证 JSON 格式
@@ -98,7 +90,12 @@ class Planner:
             for step in steps.get("steps", []):
                 steps_list.append(Step(index=index, description=step, status="pending"))
                 index += 1
-
+            
+            if DEBUG_LOG:
+                # 以橘黄色字体打印规划得到的步骤列表
+                print("\033[33m规划得到的步骤列表：\033[0m")
+                for step in steps_list:
+                    print(f"\033[33m{step.index}. {step.description}\033[0m")
             return Plan(steps=steps_list, current_index=0)
         except json.JSONDecodeError:
             raise ValueError(f"LLM 返回的步骤不是有效的 JSON 格式: {response_content}")

@@ -24,6 +24,7 @@ router_prompt = """你是一个系统底层的意图路由引擎（Router）。
 2. need_plan 的值必须是 true 或 false。"""
 
 
+# 小模型服从性差，需要额外处理json
 class Router:
     """Router is responsible for determining whether a user's input requires a plan.
 
