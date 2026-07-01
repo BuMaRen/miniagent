@@ -15,6 +15,7 @@
 from llm.base.client import LLMClient
 from llm.data.message import Message
 from memory import ConversationContext
+from state.runtime import AgentRuntime
 from tools.schema import ToolSchema
 from tools.executor import ToolExecutor
 
@@ -23,10 +24,10 @@ def agent_loop(
     client: LLMClient,
     tools: list[ToolSchema],
     executor: ToolExecutor,
-    context: ConversationContext,
+    messages: list[Message],
+    state: AgentRuntime | None = None,
 ):
-    context.summarize_if_needed()
-    turn_messages = context.messages().copy()
+    turn_messages = messages
 
     # 工具调用过程不记录，上下文只记录单次响应
     for _ in range(10):
@@ -36,14 +37,14 @@ def agent_loop(
         resp = client.chat(messages=turn_messages, tools=tools)
         if resp.finish_reason == "length":
             print("[WARNING] LLM response truncated due to length/context limit.")
-            return
+            return "[WARNING] LLM response truncated due to length/context limit."
         elif resp.finish_reason == "content_filter":
             print("[WARNING] LLM response blocked by content filter.")
-            return
+            return "[WARNING] LLM response blocked by content filter."
         elif resp.finish_reason == "stop":
-            print("Answer:\n" + resp.message.content)
-            context.append(resp.message)
-            return
+            # 打印结果的时候将字体颜色改为蓝色，表示这是本轮答案
+            # print("\033[94mAnswer:\n" + resp.message.content + "\033[0m")
+            return resp.message.content
 
         turn_messages.append(resp.message)
         for call in resp.message.tool_calls or []:
@@ -55,7 +56,12 @@ def agent_loop(
                     tool_call_id=call.id,
                 )
             )
+            if state:
+                state.record_tool_call(
+                    name=call.name, args=call.arguments, result=tool_resp
+                )
         # 如果模型比较傻，需要在这里注入一个强制继续的提示，告诉模型继续回答
     print(
         "[WARNING] Agent loop reached max steps without finishing. Consider increasing max_steps or checking model/tool behavior."
     )
+    return "[WARNING] Agent loop reached max steps without finishing. Consider increasing max_steps or checking model/tool behavior."

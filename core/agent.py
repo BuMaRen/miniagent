@@ -11,8 +11,12 @@
 #   - loop 控制流逻辑（放在 loop.py）
 #   - 工具执行逻辑（放在 tools/executor.py）
 
+import datetime
+
 from llm.base.client import LLMClient
 from llm.data.message import Message
+from planning import Router, Planner
+from state import AgentRuntime
 from tools.executor import ToolExecutor
 from tools.registry import ToolRegistry
 
@@ -28,24 +32,58 @@ class BaseAgent:
         tool_registry: ToolRegistry,
         tool_executor: ToolExecutor,
         memory: ConversationContext,
-        planner,
-        agent_state,
+        router: Router,
+        planner: Planner,
+        agent_state: AgentRuntime,
     ):
         self.llm_client = llm_client
         self.tool_registry = tool_registry
         self.tool_executor = tool_executor
         self.memory = memory
+        self.router = router
         self.planner = planner
-        self.agent_state = agent_state
+        self.state = agent_state
 
     def run(self, user_input: str):
+        if not self.router.need_plan(user_input):
+            self.memory.append(Message(role="user", content=user_input))
+            answer = agent_loop(
+                self.llm_client,
+                self.tool_registry.schemas(),
+                self.tool_executor,
+                self.memory.messages(),
+            )
+            self.memory.append(Message(role="assistant", content=answer))
+            return
+        sts = self.state
+        sts.reset()
+        sts.plan = self.planner.plan(user_input)
         self.memory.append(Message(role="user", content=user_input))
-        agent_loop(
-            self.llm_client,
-            self.tool_registry.schemas(),
-            self.tool_executor,
-            self.memory
-        )
+
+        # use_memory_as_messages = False
+        # messages = self.memory.messages().copy()
+        use_memory_as_messages = True
+        messages = self.memory.messages()
+
+        while not sts.plan.is_complete() and sts.plan.current_step():
+            step = sts.plan.current_step()
+            user_input = step.description
+            messages.append(Message(role="system", content=f"Step {step.index}: {user_input}"))
+            answer = agent_loop(
+                self.llm_client,
+                self.tool_registry.schemas(),
+                self.tool_executor,
+                messages,
+                state=sts,
+            )
+            messages.append(Message(role="assistant", content=answer))
+            sts.plan.advance(answer)
+
+        summary = sts.summary()
+        if not use_memory_as_messages:
+            self.memory.append(Message(role="assistant", content=summary))
+        # # 打印结果的时候将字体颜色改为绿色，表示这是最终答案
+        # print("\033[92mFinal Answer:\n" + summary + "\033[0m")
 
     def install_tool(self, name: str, func):
         # 动态注册工具

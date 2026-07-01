@@ -22,8 +22,14 @@ class LLMClient:
     def chat(
         self, messages: list[Message], tools: list[ToolSchema] | None
     ) -> LLMResponse:
-        """
-        发送对话请求，返回标准化响应（不暴露 provider 原始对象）
+        """chat - 发送对话请求，返回标准化响应（不暴露 provider 原始对象）
+
+        Args:
+            messages (list[Message]): 对话消息列表
+            tools (list[ToolSchema] | None): 可用工具列表
+
+        Returns:
+            LLMResponse: 标准化响应
         """
         request = self._build_request(messages, tools)
         raw_response = self._send_request(request)
