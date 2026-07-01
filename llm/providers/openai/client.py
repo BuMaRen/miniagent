@@ -23,8 +23,17 @@ from .msgs import construct_messages, choice_to_message
 
 
 class OpenAIClient(LLMClient):
+    """OpenAIClient：LLMClient 的 OpenAI/Ollama 实现。
+    """
 
     def __init__(self, api_key: str, base_url: str | None, model: str):
+        """__init_ - 初始化 OpenAIClient
+
+        Args:
+            api_key (str): OpenAI API key
+            base_url (str | None): Base URL for the API (optional, used for Ollama or other compatible interfaces)
+            model (str): Model name to use for the requests
+        """
         super().__init__()
         self._client = OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
@@ -35,7 +44,7 @@ class OpenAIClient(LLMClient):
         """
         request["model"] = self.model
         debug_resp = self._client.chat.completions.create(**request)
-        print(f"[DEBUG] OpenAI raw response: {debug_resp.model_dump()}")
+        # print(f"[DEBUG] OpenAI raw response: {debug_resp.model_dump()}")
         return debug_resp
 
     def _build_request(self, messages: list[Message], tools: list[ToolSchema] | None):

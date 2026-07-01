@@ -18,6 +18,8 @@ from llm.data.message import Message
 
 
 class ConversationContext:
+    """ConversationContext：短期记忆，维护当前对话的完整 messages 列表。
+    """
 
     def __init__(self, client: LLMClient, system_prompt: str, threshold: int = 20):
         self._client = client
@@ -27,17 +29,37 @@ class ConversationContext:
         self._messages.append(Message(role="system", content=system_prompt))
 
     def append(self, message: Message):
+        """append - 追加一条消息
+
+        Args:
+            message (Message): 要追加的消息
+        """
         self._messages.append(message)
 
     def messages(self) -> list[Message]:
+        """messages - 返回当前全部消息（供 LLMClient 使用）
+
+        Returns:
+            list[Message]: 当前全部消息
+        """
         return self._messages
 
     def clear(self):
+        """clear - 清空对话（开始新任务时调用）
+        """
         self._messages.clear()
+        self._messages.append(Message(role="system", content=self._origin_system_prompt))
 
-    def summarize_if_needed(self):
+    def summarize_if_needed(self, working:bool = False):
+        """summarize_if_needed - 当 messages 数量超过 threshold 时，调用 LLM 对历史对话做摘要压缩，
+        将摘要以 system 消息形式保留，删除早期消息，避免超出上下文窗口
+        """
+        if working:
+            print("[INFO] ConversationContext: working mode, skipping summarization.")
+            return
         msg_to_summarize = self._messages[1 : -self._threshold]
         if len(msg_to_summarize) > 0:
+            print("[INFO] ConversationContext: messages count exceeds threshold, summarizing...")
             # 调用 LLM 对历史对话做摘要压缩
             summary_prompt = (
                 "Please briefly summarize the following conversation, retaining the key information:\n"

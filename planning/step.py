@@ -18,6 +18,14 @@ from dataclasses import dataclass
 
 @dataclass
 class Step:
+    """Step represents a single step in a plan.
+
+    Attributes:
+        index (int): The step number (starting from 1).
+        description (str): A natural language description of the step.
+        status (str): The status of the step ("pending", "running", "done", "failed").
+        result (str | None): A summary of the step's result (filled in after completion).
+    """
     index: int
     description: str
     status: str = "pending"  # pending, running, done, failed
@@ -26,19 +34,55 @@ class Step:
 
 @dataclass
 class Plan:
+    """Plan represents a sequence of steps to be executed.
+
+    Attributes:
+        steps (list[Step]): A list of Step objects representing the plan.
+        current_index (int): The index of the current step being executed.
+    Methods:
+        is_complete() -> bool: Check if all steps are done.
+        advance(result: str): Mark the current step as done and move to the next step.
+        format() -> str: Format the plan into a readable string.
+    """
+
     steps: list[Step]
     current_index: int = 0
 
     def is_complete(self) -> bool:
+        """Check if the plan is complete.
+
+        Returns:
+            bool: True if all steps are done, False otherwise.
+        """
         return all(step.status == "done" for step in self.steps)
 
     def advance(self, result: str):
+        """Advance the plan to the next step.
+
+        Args:
+            result (str): The result of the current step.
+        """
         if self.current_index < len(self.steps):
             self.steps[self.current_index].status = "done"
             self.steps[self.current_index].result = result
             self.current_index += 1
 
+    def current_step(self) -> Step | None:
+        """Get the current step being executed.
+
+        Returns:
+            Step | None: The current step, or None if the plan is complete.
+        """
+        if self.current_index < len(self.steps):
+            return self.steps[self.current_index]
+        return None
+
     def format(self) -> str:
+        """Format the plan into a readable string.
+
+        Returns:
+            str: Formatted plan string.
+        """
         formatted_steps = []
         for step in self.steps:
             status_symbol = {
