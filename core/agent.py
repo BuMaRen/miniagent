@@ -11,8 +11,6 @@
 #   - loop 控制流逻辑（放在 loop.py）
 #   - 工具执行逻辑（放在 tools/executor.py）
 
-import datetime
-
 from llm.base.client import LLMClient
 from llm.data.message import Message
 from planning import Router, Planner
@@ -57,18 +55,17 @@ class BaseAgent:
             return
         sts = self.state
         sts.reset()
-        sts.plan = self.planner.plan(user_input)
+        sts.plan = self.planner.plan(user_input, self.memory.context())
         self.memory.append(Message(role="user", content=user_input))
 
-        # use_memory_as_messages = False
-        # messages = self.memory.messages().copy()
-        use_memory_as_messages = True
         messages = self.memory.messages()
 
         while not sts.plan.is_complete() and sts.plan.current_step():
             step = sts.plan.current_step()
             user_input = step.description
-            messages.append(Message(role="system", content=f"Step {step.index}: {user_input}"))
+            messages.append(
+                Message(role="system", content=f"Step {step.index}: {user_input}")
+            )
             answer = agent_loop(
                 self.llm_client,
                 self.tool_registry.schemas(),
@@ -80,10 +77,6 @@ class BaseAgent:
             sts.plan.advance(answer)
 
         summary = sts.summary()
-        if not use_memory_as_messages:
-            self.memory.append(Message(role="assistant", content=summary))
-        # # 打印结果的时候将字体颜色改为绿色，表示这是最终答案
-        # print("\033[92mFinal Answer:\n" + summary + "\033[0m")
 
     def install_tool(self, name: str, func):
         # 动态注册工具

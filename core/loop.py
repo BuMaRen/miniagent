@@ -12,9 +12,9 @@
 #     （针对不够健壮的本地模型，可在 AgentConfig 中配置 force_continue_prompt 来注入提示）
 #   - 返回值统一为 LoopResult 数据类，包含最终答案文本、调用轮次、工具调用列表
 
+from flag.debug import DEBUG_LOG
 from llm.base.client import LLMClient
 from llm.data.message import Message
-from memory import ConversationContext
 from state.runtime import AgentRuntime
 from tools.schema import ToolSchema
 from tools.executor import ToolExecutor
@@ -31,19 +31,21 @@ def agent_loop(
 
     # 工具调用过程不记录，上下文只记录单次响应
     for _ in range(10):
-        print(
-            f"[DEBUG] Agent loop iteration {_ + 1}, messages count: {len(turn_messages)}"
-        )
+        if DEBUG_LOG:
+            print(f"processing messages: {turn_messages[-1]}")
         resp = client.chat(messages=turn_messages, tools=tools)
         if resp.finish_reason == "length":
-            print("[WARNING] LLM response truncated due to length/context limit.")
+            if DEBUG_LOG:
+                print("[WARNING] LLM response truncated due to length/context limit.")
             return "[WARNING] LLM response truncated due to length/context limit."
         elif resp.finish_reason == "content_filter":
-            print("[WARNING] LLM response blocked by content filter.")
+            if DEBUG_LOG:
+                print("[WARNING] LLM response blocked by content filter.")
             return "[WARNING] LLM response blocked by content filter."
         elif resp.finish_reason == "stop":
             # 打印结果的时候将字体颜色改为蓝色，表示这是本轮答案
-            # print("\033[94mAnswer:\n" + resp.message.content + "\033[0m")
+            if DEBUG_LOG:
+                print("\033[94mAnswer:\n" + resp.message.content + "\033[0m")
             return resp.message.content
 
         turn_messages.append(resp.message)
@@ -61,7 +63,8 @@ def agent_loop(
                     name=call.name, args=call.arguments, result=tool_resp
                 )
         # 如果模型比较傻，需要在这里注入一个强制继续的提示，告诉模型继续回答
-    print(
-        "[WARNING] Agent loop reached max steps without finishing. Consider increasing max_steps or checking model/tool behavior."
-    )
+    if DEBUG_LOG:
+        print(
+            "[WARNING] Agent loop reached max steps without finishing. Consider increasing max_steps or checking model/tool behavior."
+        )
     return "[WARNING] Agent loop reached max steps without finishing. Consider increasing max_steps or checking model/tool behavior."
