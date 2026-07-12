@@ -50,9 +50,10 @@ class ToolSchema:
 
 class ParameterSchema:
 
-    def __init__(self, parameter_type: str, description: str):
+    def __init__(self, parameter_type: str, description: str, required: bool = True):
         self._parameter_type = parameter_type
         self._description = description
+        self._required = required
 
     @property
     def parameter_type(self):
@@ -63,6 +64,11 @@ class ParameterSchema:
     def description(self):
         # 参数的描述信息，通常从函数的 docstring 中提取
         return self._description
+
+    @property
+    def required(self):
+        # 该参数在函数签名中是否没有默认值（没有默认值即为必填）
+        return self._required
 
 
 def _parse_google_docstring(docstring: str) -> tuple[str, dict[str, str]]:
@@ -136,6 +142,8 @@ def schema_from_func(func) -> ToolSchema:
             parameter_type=_python_type_to_json_schema(param_type),
             # 从解析好的 param_descs 中按参数名取描述，找不到则为空字符串
             description=param_descs.get(name, ""),
+            # 函数签名里没有默认值 => 必填
+            required=sig.parameters[name].default is inspect.Parameter.empty,
         )
 
     # func.__name__ 是函数名字符串，例如 "read_file"

@@ -16,7 +16,7 @@
 
 from llm.data.message import Message, LLMResponse
 from llm.base.client import LLMClient
-from tools.schema import ToolSchema
+from tools.schema import ToolCall, ToolSchema
 from openai import OpenAI
 
 from .msgs import construct_messages, choice_to_message
@@ -71,6 +71,93 @@ class OpenAIClient(LLMClient):
             usage=mp.get("usage", dict()),
         )
 
+    def stream_chat(
+        self,
+        messages: list[Message],
+        tools: list[ToolSchema] | None,
+        on_delta=None,
+        on_reasoning_delta=None,
+        max_tokens: int | None = None,
+        extra_body: dict | None = None,
+    ) -> LLMResponse:
+        """
+        以流式（SSE）方式发起请求，边到达边通过 on_delta(text_chunk) 回调吐出文本增量。
+
+        新增方法，不改动 chat()/_send_request() 的既有行为，仅供需要观察生成进度、
+        或需要规避非流式模式下"生成完才返回一个字节"导致的长时间静默（进而可能触发
+        idle read timeout）的调用方使用。
+
+        思考模式开启时，模型的推理过程通过 delta.reasoning_content 单独下发，不会出现在
+        delta.content 里；如果只监听 on_delta，思考阶段会完全没有任何回调触发，看起来像
+        "卡住没输出"。需要观察思考过程时请传 on_reasoning_delta。
+
+        Args:
+            messages: 对话消息列表
+            tools: 可用工具列表
+            on_delta: 每收到一段正文增量时调用一次，参数为该增量字符串
+            on_reasoning_delta: 每收到一段思考过程增量时调用一次（仅思考模式开启时有值）
+            max_tokens: 单次生成的最大 token 数上限，兜底防止异常情况下无限生成
+            extra_body: 透传给 SDK 的额外请求字段（如 Qwen 的 {"enable_thinking": False}）
+
+        Returns:
+            LLMResponse: 与 chat() 相同的标准化响应
+        """
+        request = self._build_request(messages, tools)
+        request["model"] = self.model
+        request["stream"] = True
+        request["stream_options"] = {"include_usage": True}
+        if max_tokens is not None:
+            request["max_tokens"] = max_tokens
+        if extra_body is not None:
+            request["extra_body"] = extra_body
+        stream = self._client.chat.completions.create(**request)
+
+        content_parts = []
+        tool_calls_by_index: dict[int, dict] = {}
+        finish_reason = ""
+        usage = {}
+
+        for chunk in stream:
+            if chunk.usage:
+                usage = chunk.usage.model_dump()
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            delta = choice.delta
+            if delta.content:
+                content_parts.append(delta.content)
+                if on_delta:
+                    on_delta(delta.content)
+            reasoning_piece = getattr(delta, "reasoning_content", None)
+            if reasoning_piece and on_reasoning_delta:
+                on_reasoning_delta(reasoning_piece)
+            for tc in delta.tool_calls or []:
+                entry = tool_calls_by_index.setdefault(
+                    tc.index, {"id": "", "name": "", "arguments": ""}
+                )
+                if tc.id:
+                    entry["id"] = tc.id
+                if tc.function:
+                    if tc.function.name:
+                        entry["name"] = tc.function.name
+                    if tc.function.arguments:
+                        entry["arguments"] += tc.function.arguments
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
+
+        return LLMResponse(
+            message=Message(
+                role="assistant",
+                content="".join(content_parts) or None,
+                tool_calls=[
+                    ToolCall(id=v["id"], name=v["name"], arguments=v["arguments"])
+                    for v in tool_calls_by_index.values()
+                ],
+            ),
+            finish_reason=finish_reason,
+            usage=usage,
+        )
+
 
 def _openai_tools(tools: list[ToolSchema]):
     """
@@ -80,11 +167,14 @@ def _openai_tools(tools: list[ToolSchema]):
     function_list = []
     for tool in tools:
         properties = {}
+        required = []
         for tool_name in tool.parameters:
             properties[tool_name] = {
                 "type": tool.parameters[tool_name].parameter_type,
                 "description": tool.parameters[tool_name].description,
             }
+            if tool.parameters[tool_name].required:
+                required.append(tool_name)
 
         function_list.append(
             {
@@ -95,6 +185,7 @@ def _openai_tools(tools: list[ToolSchema]):
                     "parameters": {
                         "type": "object",
                         "properties": properties,
+                        "required": required,
                     },
                 },
             }

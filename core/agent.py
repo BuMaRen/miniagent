@@ -43,16 +43,71 @@ class BaseAgent:
         self.state = agent_state
 
     def run(self, user_input: str):
-        if not self.router.need_plan(user_input):
-            self.memory.append(Message(role="user", content=user_input))
-            answer = agent_loop(
-                self.llm_client,
-                self.tool_registry.schemas(),
-                self.tool_executor,
-                self.memory.messages(),
+        if not self.router or not self.planner or not self.router.need_plan(user_input):
+            lines = [line for line in user_input.splitlines() if line.strip()]
+            if len(lines) <= 1:
+                self.memory.append(Message(role="user", content=user_input))
+                answer = agent_loop(
+                    self.llm_client,
+                    self.tool_registry.schemas(),
+                    self.tool_executor,
+                    self.memory.messages(),
+                )
+                self.memory.append(Message(role="assistant", content=answer))
+                return answer
+
+            # 多行输入：每一行单独发起一次 chat，每次都是独立的上下文（不携带
+            # 其他行的解析结果/工具调用记录），只共享同一个 uuid。过程中的
+            # 每次 chat 都不打印，等 run 整体结束后统一由调用方打印最终结果。
+            system_msg = self.memory.messages()[0]
+            tools = self.tool_registry.schemas()
+
+            uuid_messages = [
+                system_msg,
+                Message(
+                    role="user",
+                    content="请调用 id_generate 工具生成一个唯一的订单编号。",
+                ),
+            ]
+            agent_loop(
+                self.llm_client, tools, self.tool_executor, uuid_messages, verbose=False
             )
+            order_uuid = next(
+                (m.content for m in uuid_messages if m.role == "tool"), ""
+            )
+
+            for line in lines:
+                line_messages = [
+                    system_msg,
+                    Message(
+                        role="user",
+                        content=(
+                            f"订单编号（uuid）为：{order_uuid}\n"
+                            f"请解析以下这一行内容，并使用该订单编号调用 record 工具记录解析结果：\n{line}"
+                        ),
+                    ),
+                ]
+                agent_loop(
+                    self.llm_client, tools, self.tool_executor, line_messages, verbose=False
+                )
+
+            summary_messages = [
+                system_msg,
+                Message(
+                    role="user",
+                    content=(
+                        f"所有行已处理完毕，请使用订单编号 {order_uuid} 调用 "
+                        "summary_record 工具生成最终汇总结果并返回给用户。"
+                    ),
+                ),
+            ]
+            answer = agent_loop(
+                self.llm_client, tools, self.tool_executor, summary_messages, verbose=False
+            )
+
+            self.memory.append(Message(role="user", content=user_input))
             self.memory.append(Message(role="assistant", content=answer))
-            return
+            return answer
         sts = self.state
         sts.reset()
         sts.plan = self.planner.plan(user_input, self.memory.context())
