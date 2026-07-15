@@ -8,8 +8,8 @@ schema、统一注册、安全执行。Skill(agent/skill.py)就是若干这样�
     ToolExecutor                 —— 工具调用的安全执行
 """
 
-from tools.schema import ToolSchema, schema_from_func
-from tools.registry import ToolRegistry
+from tools.schema import ToolSchema
+from tools.registry import ToolRegistry, tool
 from tools.executor import ToolExecutor
 
-__all__ = ["ToolSchema", "schema_from_func", "ToolRegistry", "ToolExecutor"]
+__all__ = ["ToolSchema", "ToolRegistry", "tool", "ToolExecutor"]

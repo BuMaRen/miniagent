@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from llm.message import Message, ToolCall
-from tools.registry import ToolRegistry
+from tools.registry import ToolRegistry, default_registry
 
 
 class ToolExecutor:

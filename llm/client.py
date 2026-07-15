@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from llm.message import Message, ToolCall
+from tools.schema import ToolSchema
 
 
 @dataclass
@@ -34,22 +35,23 @@ class LLMClient(ABC):
     def chat(
         self,
         messages: list[Message],
-        tools: list[dict[str, Any]] | None = None,
+        tools: list[ToolSchema] | None = None,
         **params: Any,
     ) -> ChatResponse:
         """发起一次对话补全。
 
         Args:
             messages: 完整消息序列(由 ConversationMemory.render() 产出)。
-            tools:    可用工具的 schema 列表(由 ToolRegistry.schemas() 产出),
-                      None 表示本次不提供工具。
+            tools:    可用工具的 ToolSchema 列表(由 ToolRegistry.schemas() 产出,
+                      provider-neutral),各 Provider 实现内部自行转换成对应格式
+                      (如 OpenAI 走 schema.to_openai());None 表示本次不提供工具。
             params:   温度、max_tokens 等 Provider 参数。
         """
 
     def stream(
         self,
         messages: list[Message],
-        tools: list[dict[str, Any]] | None = None,
+        tools: list[ToolSchema] | None = None,
         **params: Any,
     ):
         """流式返回(可选能力)。默认不支持,需要时由具体 Provider 覆写。"""

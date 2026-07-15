@@ -5,7 +5,8 @@
   - chat():
       1. 把 list[Message] 转成 OpenAI 的 messages 结构(注意 tool 消息需带 tool_call_id,
          assistant 的 tool_calls 需要还原成 OpenAI 的 tool_calls 字段)。
-      2. 调用 chat.completions.create(model, messages, tools=...)。
+      2. 把 tools(list[ToolSchema])逐个调用 .to_openai() 转成 OpenAI 的 tool 定义,
+         再调用 chat.completions.create(model, messages, tools=...)。
       3. 把响应解析回框架的 ChatResponse:抽取 assistant message、tool_calls、usage。
   - 注意点(来自既往调试经验):
       * 部分模型/端点返回的 tool_calls 可能为 None,需判空,不能直接迭代。
@@ -19,6 +20,7 @@ from typing import Any
 
 from llm.client import LLMClient, ChatResponse
 from llm.message import Message
+from tools.schema import ToolSchema
 
 
 class OpenAIClient(LLMClient):
@@ -36,7 +38,7 @@ class OpenAIClient(LLMClient):
     def chat(
         self,
         messages: list[Message],
-        tools: list[dict[str, Any]] | None = None,
+        tools: list[ToolSchema] | None = None,
         **params: Any,
     ) -> ChatResponse:
         # TODO: Message[] -> OpenAI messages;调用 API;解析回 ChatResponse。
