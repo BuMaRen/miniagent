@@ -9,7 +9,7 @@ schema、统一注册、安全执行。Skill(agent/skill.py)就是若干这样�
 """
 
 from tools.schema import ToolSchema
-from tools.registry import ToolRegistry, tool
+from tools.registry import tool
 from tools.executor import ToolExecutor
 
-__all__ = ["ToolSchema", "ToolRegistry", "tool", "ToolExecutor"]
+__all__ = ["ToolSchema", "tool", "ToolExecutor"]
