@@ -11,37 +11,55 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
+from state.backends.memory import InMemoryStateStore
 from state.store import StateStore, StatePath
 from state.schema import StateSchema
 
 
 class JsonFileStateStore(StateStore):
+    """组合一个 InMemoryStateStore 做路径寻址,每次写操作后把全量状态 flush 到磁盘。"""
+
     def __init__(self, path: str | Path, schema: StateSchema | None = None) -> None:
         self._path = Path(path)
-        self._schema = schema
-        self._data: dict[str, Any] = {}
-        # TODO: 若 self._path 存在则读入 self._data(实现断点恢复)。
+        initial = self._read_from_disk()
+        self._store = InMemoryStateStore(schema=schema, initial=initial)
+
+    def _read_from_disk(self) -> dict[str, Any]:
+        if not self._path.exists():
+            return {}
+        with self._path.open("r", encoding="utf-8") as f:
+            return json.load(f)
 
     def _flush(self) -> None:
-        raise NotImplementedError  # TODO: 原子写入 self._data 到 self._path
+        # 先写临时文件再 rename:rename 在同一文件系统内是原子操作,
+        # 避免进程在写盘中途崩溃导致状态文件损坏成半份 JSON。
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self._path.with_name(self._path.name + ".tmp")
+        with tmp_path.open("w", encoding="utf-8") as f:
+            json.dump(self._store.snapshot(), f, ensure_ascii=False, indent=2)
+        tmp_path.replace(self._path)
 
     def get(self, path: StatePath, default: Any = None) -> Any:
-        raise NotImplementedError
+        return self._store.get(path, default)
 
     def patch(self, path: StatePath, value: Any) -> None:
-        raise NotImplementedError  # TODO: 更新内存后 self._flush()
+        self._store.patch(path, value)
+        self._flush()
 
     def append(self, path: StatePath, value: Any) -> None:
-        raise NotImplementedError  # TODO: 更新内存后 self._flush()
+        self._store.append(path, value)
+        self._flush()
 
     def slice(self, paths: list[StatePath]) -> dict[str, Any]:
-        raise NotImplementedError
+        return self._store.slice(paths)
 
     def snapshot(self) -> dict[str, Any]:
-        raise NotImplementedError
+        return self._store.snapshot()
 
     def load(self, data: dict[str, Any]) -> None:
-        raise NotImplementedError  # TODO: 载入后 self._flush()
+        self._store.load(data)
+        self._flush()

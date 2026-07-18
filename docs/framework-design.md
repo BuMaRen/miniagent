@@ -12,7 +12,8 @@
 
 | 概念 | 作用 | 场景相关? |
 |---|---|---|
-| Stage | 最小执行单元,声明 input/output 契约 | 否(容器);场景相关的是挂在它上面的 Agent/Skill |
+| Node | **协议(接口)**,规定"可执行节点长什么样":有 `name` + `run(ctx, inputs)`。Stage 与四个控制流原语都是它的实现 | 否(接口) |
+| Stage | 最小执行单元,是 Node 的**叶子实现**(真正产出内容),声明 input/output 契约 | 否(容器);场景相关的是挂在它上面的 Agent/Skill |
 | Agent | LLM + ToolRegistry + Skills + Memory,Stage 的典型执行体 | 否(结构),Skill 决定它做什么 |
 | Skill | 一组工具(function + schema),赋予 Agent 特定能力 | **是** —— 这是场景方二次开发的主要挂载点 |
 | State Store | 通用的结构化共享状态读写接口 | 否(接口);字段语义由场景方提供的 Schema 决定 |
@@ -21,19 +22,60 @@
 | Checkpoint | 暂停等待外部(人工)输入的通用断点 | 否(是否设置由场景方决定) |
 | Workflow 定义 | 场景方用上述原语拼出的具体流程 | 是 |
 
-## 3. Stage —— 最小执行单元
+## 3. Node 与 Stage —— 执行协议与最小执行单元
+
+### 3.1 Node —— 统一执行协议(接口,不是类)
+
+初读容易把 Node 和 Stage 当成两个平级、职责重叠的概念。它们其实**不在同一层级**:
+
+- **Node 是"协议 / 接口"(Python `Protocol`),不是一个可实例化的类。** 它只规定一件事:凡是想被引擎当成"一步"来驱动的东西,都必须有 `name` 和 `run(ctx, inputs) -> outputs`。Node 本身没有任何实现体。
+- **Stage 是 Node 的具体实现之一。** 除了 Stage,四个控制流原语(Sequence / Loop / ForEach / Checkpoint)也都实现了 Node。
+
+```mermaid
+flowchart TB
+  N["Node（协议 / 接口）<br/>只要求: name + run(ctx, inputs)"]
+  N --> S["Stage<br/>叶子节点 · 真正产出内容"]
+  N --> SEQ["Sequence<br/>组合节点 · 编排"]
+  N --> LP["Loop<br/>组合节点 · 编排"]
+  N --> FE["ForEach<br/>组合节点 · 编排"]
+  N --> CP["Checkpoint<br/>特殊节点 · 暂停/恢复"]
+```
+
+打个比方:Node 相当于 `interface Runnable`,Stage 相当于 `class XxxTask implements Runnable`——一个是契约,一个是履行契约的人,不存在"职责冲突"。
+
+**为什么要单独抽象出 Node,而不是只留 Stage?** 因为框架的核心卖点是"少量原语任意嵌套组合",而 Node 正是这一点在类型层面的粘合剂:
+
+- `Loop.producer / critic / reviser` 的类型是 `Node`
+- `ForEach.body` 的类型是 `Node`
+- `Sequence.nodes` 的类型是 `list[Node]`
+
+正因为它们只要求"是个 Node",所以 `ForEach` 的 body 可以塞一个 `Loop`、`Loop` 的 producer 可以塞一个 `Stage`——任意层级的嵌套组合才成立。如果没有 Node、这些原语写死"我只能装 Stage",嵌套就没了。
+
+| | **Node** | **Stage** |
+|---|---|---|
+| 是什么 | 协议 / 接口(`Protocol`) | 一个具体 `dataclass` |
+| 层级 | 抽象 | 实现(五种节点之一) |
+| 有 run 实现吗 | 没有,只声明签名 | 有,真正的执行逻辑 |
+| 还有谁是它 | Sequence / Loop / ForEach / Checkpoint | —— |
+| 职责 | 规定"可执行节点统一长什么样" | 把一步"输入→输出"落地:校验、读切片、调 executor、写回 |
+
+一句话:**Node 定义"什么算一个可执行的步骤";Stage 是"其中会真正产出内容的那一种步骤"。前者是形状,后者是内容。**
+
+### 3.2 Stage —— 最小执行单元
 
 ```
-Stage:
+Stage:                              # 实现 Node 协议
   name: str
   input_schema: Schema
   output_schema: Schema
   executor: Agent | Callable        # 谁来完成 input -> output
   reads:  list[StatePath]           # 声明式:需要从 State Store 读哪些切片
-  writes: list[StatePath]           # 声明式:会往 State Store 写哪些切片
+  writes: list[StatePath]           # 声明式:会往 State Store 写哪些切片(可为空)
 ```
 
 `reads`/`writes` 是声明式的,好处有两个:一是执行时可以只把相关状态切片注入上下文,避免把全量状态都塞给模型;二是这些声明本身可以用来做依赖分析(比如判断哪些 Stage 之间没有状态依赖、理论上可以并行)。
+
+注意 **`writes` 是可选的、默认为空——不是每个 Stage 都会写 State Store。** 数据有两条通道:①上一个节点的 `outputs` 直接作为下一个节点的 `inputs`(揮发,不落 State);②只有 `writes` 声明的切片才写回 State Store。仅当某个事实需要被**非相邻的后段**读取(如故事圣经在角色设计阶段写、逐章撰写/统稿阶段才读),或需要追加历史 / 支持断点恢复时,才写 State。Loop 内 critic 的 `{passed, feedback}` 只被相邻的 reviser 消费,通常走通道①、不落 State。
 
 Stage 不关心"怎么产出输出"——它只是一个契约。同一个 Stage 定义换一个 executor(比如换一个挂载了不同 Skill 的 Agent),就能在不同场景里做完全不同的事,这是场景可替换性的关键。
 
