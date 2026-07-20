@@ -17,10 +17,13 @@ StatePath = str
 
 @runtime_checkable
 class Node(Protocol):
-    """所有可执行节点的统一协议。
+    """所有可执行节点的统一协议。这是抽象概念,Stage 只是其中一种具体实现。
 
     Stage 以及全部控制流原语(Sequence / Loop / ForEach / Checkpoint)都实现
     这个协议,因此可以任意嵌套组合(见 engine/primitives/)。
+
+    类似于 Golang 的 interface,Node 只声明了一个 run() 方法,不关心具体实现。
+    只要有一个对象具有 name 且实现了 run() 方法,就可以被当作 Node 使用,这就是 Python 的"鸭子类型"。
     """
 
     name: str
@@ -61,17 +64,33 @@ class Stage:
     writes: Sequence[StatePath] = field(default_factory=tuple)
 
     def run(self, ctx: "RunContext", inputs: dict[str, Any]) -> dict[str, Any]:
-        # TODO: 实现执行流程
+        # 实现执行流程
         #   1. 若 input_schema 存在,校验 inputs。
         #   2. 通过 ctx.state.slice(self.reads) 取相关状态切片,合并进 inputs。
         #   3. 触发生命周期 hook(before_stage),调用 self.executor(ctx, inputs)。
         #   4. 若 output_schema 存在,校验 outputs。
         #   5. 依据 self.writes 把 outputs 中对应字段写回 ctx.state。
         #   6. 触发 after_stage hook,返回 outputs。
-        raise NotImplementedError
+        if self.input_schema is not None:
+            self.input_schema.validate(inputs)
+        if ctx.hooks and ctx.hooks.before_stage:
+            ctx.hooks.before_stage(self.name, inputs)
+        if self.reads:
+            state_slice = ctx.state.slice(self.reads)
+            inputs.update({"state": state_slice})
+
+        outputs = self.executor(ctx, inputs)
+
+        if self.output_schema is not None:
+            self.output_schema.validate(outputs)
+        if self.writes:
+            ctx.state.patch(self.writes, outputs)
+        if ctx.hooks and ctx.hooks.after_stage:
+            ctx.hooks.after_stage(self.name, outputs)
+        return outputs
 
 
-# 避免循环导入:仅类型检查时引入 RunContext。
+# 避免循环导入:仅类型检查时引入 RunContext
 from typing import TYPE_CHECKING  # noqa: E402
 
 if TYPE_CHECKING:

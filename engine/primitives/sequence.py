@@ -20,6 +20,9 @@ class Sequence:
     nodes: list[Node] = field(default_factory=list)
 
     def run(self, ctx: RunContext, inputs: dict[str, Any]) -> dict[str, Any]:
-        # TODO: 依次执行 self.nodes,把每个节点的 outputs 作为下一个的 inputs;
-        #       返回最后一个节点的 outputs。空序列时原样返回 inputs。
-        raise NotImplementedError
+        # 依次执行 self.nodes,把每个节点的 outputs 作为下一个的 inputs;
+        if not self.nodes:
+            return inputs
+        for node in self.nodes:
+            inputs = node.run(ctx, inputs)
+        return inputs

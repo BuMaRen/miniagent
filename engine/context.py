@@ -28,6 +28,7 @@ class LifecycleHooks:
 
     before_stage: Callable[[str, dict[str, Any]], None] | None = None
     after_stage: Callable[[str, dict[str, Any]], None] | None = None
+    # loop 指的是 workflow 的 loop 而不是 Agent 中处理 ToolCall 的那层循环
     before_loop_iteration: Callable[[str, int], None] | None = None
     after_loop_iteration: Callable[[str, int, bool], None] | None = None
     on_checkpoint: Callable[[str], None] | None = None

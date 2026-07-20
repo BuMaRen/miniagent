@@ -139,9 +139,9 @@ stages:
 
   - checkpoint: confirm_outline   # 见 §5
 
-  - foreach:                   # 3.6 + 3.8,对每一章
+  - foreach:                   # 3.6 + 3.8,对每一章;当前章大纲每轮发布到游标 item_path
       items_path: story_bible.chapters
-      body:
+      body:                     # 连贯性靠 body 的 reads 读故事圣经/滚动摘要,不靠 ForEach 喂前文
         loop:
           producer: chapter_drafting
           critic: chapter_critic

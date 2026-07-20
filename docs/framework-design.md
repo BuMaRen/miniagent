@@ -128,14 +128,21 @@ Loop:
 
 ### 6.3 ForEach(遍历子流程)
 
+把经典 for-each 循环搬到编排层:`for (i = 0; i < len(items); i++) { body }`。
+
 ```
 ForEach:
-  items_path: StatePath        # 从 State Store 里取一个列表
-  body: Stage | Loop | Sequence   # 对每个元素执行的子流程
-  shared_state: true            # 子流程之间共享同一个 State Store 实例
+  items_path: StatePath        # 待遍历列表的状态路径,逐个遍历
+  body: Node                   # 对每个元素执行的子流程(Stage / Loop / Sequence)
+  index_path: StatePath        # 游标——当前下标(默认 _foreach.<name>.index),同时是恢复点
+  item_path: StatePath         # 游标——当前元素(默认 _foreach.<name>.item),body 用 reads 读它
 ```
 
-用于"对列表中每一项重复同一段流程"且各项之间需要通过共享状态保持连贯的场景(小说里的"逐章撰写"就是 `ForEach(chapters, body=Loop(draft, review, revise))`)。
+**ForEach 只负责"重复"这一件事,不负责"连贯性"。** 每轮做三步:condition(`i < len(items)`)→ bind(把 `items[i]` 发布到游标 `item_path`)→ advance(`i++`)。body 每轮通过它自己的 `reads=[item_path]` 读到当前元素,和任何一个普通 Stage 读状态切片完全一样——不存在"塞进 inputs 的魔法键"。
+
+而"各项之间保持连贯"(逐章写作时第 N 章要看到前 N-1 章的产物)**不是 ForEach 的职责**:它是 body 里各 Stage 对共享 State Store 做 `reads`/`writes` 的自然结果。所以这里既没有、也不需要 `shared_state` 之类的开关。小说里的"逐章撰写"就是 `ForEach(chapters, body=Loop(draft, review, revise))`,其连贯性来自 body 内部读一份滚动摘要 / 故事圣经,而非 ForEach 把前文全喂回去(见 §5 上下文成本控制)。
+
+游标 `index_path` 存在 State Store 里,因此"从中断处恢复"是白捡的:从 Checkpoint 快照续跑时,发现下标已有值就接着往下走。整个节点全由数据字段描述,可从 §7 的 YAML 直接拼出,不含任何运行期回调。
 
 ### 6.4 Checkpoint(人工断点)
 
@@ -168,8 +175,8 @@ stages:
   - checkpoint: confirm_before_continue
 
   - foreach:
-      items_path: <某个列表状态字段>
-      body:
+      items_path: <某个列表状态字段>   # 逐个遍历它;当前元素每轮发布到游标 item_path
+      body:                            # body 里的 Stage 用 reads=[<item_path>] 读当前元素
         loop:
           producer: stage_d
           critic: stage_d_critic
