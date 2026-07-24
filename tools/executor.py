@@ -27,8 +27,8 @@ class ToolExecutor:
           4. 把返回值序列化为字符串,组装成 Message(role="tool",
              tool_call_id=call.id, content=结果)。
         """
-        func = self._registry.get(call.name)
         try:
+            func = self._registry.get(call.name)
             result = func(**call.arguments)
         except Exception as e:
             result = str(e)

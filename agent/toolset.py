@@ -38,8 +38,7 @@ class ToolSet:
 
         依赖 tools.schema.schema_from_func 从函数签名/docstring 推断 ToolSchema。
         """
-        # TODO: return cls(name, [(f, schema_from_func(f)) for f in funcs])
-        raise NotImplementedError
+        return cls(name, [(f, schema_from_func(f)) for f in funcs])
 
     def tool_names(self) -> list[str]:
         """返回该 ToolSet 暴露的所有工具名,便于校验重名冲突。"""

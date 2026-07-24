@@ -78,7 +78,7 @@ miniagent/
 └── scenarios/                  # 场景层:二次开发挂载点(见 scenarios/README.md)
 ```
 
-> 目前各文件是带完整接口签名与实现指导(`# TODO`)的骨架,尚未填充具体逻辑。
+> 框架层(`engine`/`agent`/`state`/`llm`/`tools`)已完成实现;`scenarios/` 下的具体场景(如小说生成)尚待落地。
 
 ## 关键设计点
 
