@@ -2,7 +2,7 @@
 
 Stage 是一个"输入 -> 输出"的契约容器。它本身不关心"怎么产出输出",
 只声明:谁来执行(executor)、需要从共享状态读哪些切片(reads)、会写哪些
-切片(writes)。换一个 executor(例如换一个挂了不同 Skill 的 Agent),
+切片(writes)。换一个 executor(例如换一个挂了不同 ToolSet 的 Agent),
 同一个 Stage 定义就能在不同场景里做完全不同的事——这是场景可替换性的关键。
 """
 
@@ -48,7 +48,7 @@ class Stage:
     """一个具体的执行步骤。
 
     Attributes:
-        name:          唯一名称,用于日志、Skill 挂载映射(见 §4/§7)。
+        name:          唯一名称,用于日志、ToolSet 挂载映射(见 §4/§7)。
         executor:      真正把 inputs 变成 outputs 的执行体(通常是 Agent)。
         input_schema:  输入契约(交给 state/schema.py 校验,可为 None 表示不校验)。
         output_schema: 输出契约。

@@ -1,8 +1,8 @@
 # MiniAgent
 
-一个**与场景无关**的可复用 AI 工作流框架:提供 Stage(阶段)、Skill(能力挂载)、State Store(共享状态)、Loop(评审-修订循环)、ForEach(遍历子流程)、Checkpoint(人工断点)等通用构件。二次开发一个具体场景,通常只需要"定义 State Schema + 拼装这些原语 + 挂载/开发对应 Skill",而不需要重新设计流程结构。
+一个**与场景无关**的可复用 AI 工作流框架:提供 Stage(阶段)、ToolSet(能力挂载)、State Store(共享状态)、Loop(评审-修订循环)、ForEach(遍历子流程)、Checkpoint(人工断点)等通用构件。二次开发一个具体场景,通常只需要"定义 State Schema + 拼装这些原语 + 挂载/开发对应 ToolSet",而不需要重新设计流程结构。
 
-当前第一个实例场景:**根据用户给定的题材,自动生成一篇中短篇小说。** 要让它"更专业地生产小说",预期的改动方式是打磨/扩充对应 Stage 上挂载的 Skill(如章节撰写、一致性评审),而不是改动引擎结构——详见 [docs/framework-design.md](docs/framework-design.md) §8。
+当前第一个实例场景:**根据用户给定的题材,自动生成一篇中短篇小说。** 要让它"更专业地生产小说",预期的改动方式是打磨/扩充对应 Stage 上挂载的 ToolSet(如章节撰写、一致性评审),而不是改动引擎结构——详见 [docs/framework-design.md](docs/framework-design.md) §8。
 
 ## 为什么需要拆阶段,而不是一次性生成
 
@@ -36,8 +36,8 @@ flowchart TD
 
 ## 项目定位
 
-- **框架层**([docs/framework-design.md](docs/framework-design.md)):Stage、Skill、State Store、Loop、ForEach、Checkpoint 等通用构件,不绑定"小说"这一场景,理论上可复用于代码审查、报告撰写等其他多阶段生成任务。这是二次开发时应该复用、不应该改动结构的部分。
-- **场景层**([docs/workflow-design.md](docs/workflow-design.md) / [docs/story-bible-schema.md](docs/story-bible-schema.md)):小说生成工作流是第一个用来验证这套抽象是否好用的具体实例——用框架原语拼出流程,并挂载场景专属的 Skill 与 State Schema。
+- **框架层**([docs/framework-design.md](docs/framework-design.md)):Stage、ToolSet、State Store、Loop、ForEach、Checkpoint 等通用构件,不绑定"小说"这一场景,理论上可复用于代码审查、报告撰写等其他多阶段生成任务。这是二次开发时应该复用、不应该改动结构的部分。
+- **场景层**([docs/workflow-design.md](docs/workflow-design.md) / [docs/story-bible-schema.md](docs/story-bible-schema.md)):小说生成工作流是第一个用来验证这套抽象是否好用的具体实例——用框架原语拼出流程,并挂载场景专属的 ToolSet 与 State Schema。
 
 ## 项目结构
 
@@ -56,8 +56,8 @@ miniagent/
 │       └── checkpoint.py       #     人工断点(支持异步挂起/恢复)
 │
 ├── agent/                      # 能力挂载层
-│   ├── agent.py                #   Agent = LLM + 工具 + 技能 + 记忆(agentic loop)
-│   ├── skill.py                #   Skill:一组 (func, schema)
+│   ├── agent.py                #   Agent = LLM + 工具 + 工具集 + 记忆(agentic loop)
+│   ├── toolset.py                #   ToolSet:一组 (func, schema)
 │   └── memory.py               #   对话记忆(短期,区别于 State Store)
 │
 ├── state/                      # 共享状态
@@ -86,15 +86,15 @@ miniagent/
 2. **reads/writes 声明式** — Stage 显式声明需要读写的状态切片,既能只向 LLM 注入相关上下文(控制成本),又能做依赖分析(判断哪些 Stage 可并行)。
 3. **Loop 的退出与超限策略** — "什么叫合格"由 critic 的输出决定,引擎不做假设;超限有 `accept_last / escalate_to_checkpoint / raise` 三种策略,杜绝死循环。
 4. **两种记忆分离** — `agent/memory.py` 是单次 Agent 运行内的短期对话记忆;`state/` 是跨 Stage 的长期结构化事实。用摘要保证连贯,用结构化状态保证事实一致,职责分开。
-5. **能力通过 Skill 挂载,而非改结构** — 换场景/做专业化的预期改动是"换一套 Skill + 换一份 State Schema",Stage/Loop/ForEach 的骨架不动。
+5. **能力通过 ToolSet 挂载,而非改结构** — 换场景/做专业化的预期改动是"换一套 ToolSet + 换一份 State Schema",Stage/Loop/ForEach 的骨架不动。
 
 ## 二次开发一个新场景
 
 参见 [docs/framework-design.md](docs/framework-design.md) §8 与 [scenarios/README.md](scenarios/README.md)。典型步骤:
 
 1. 定义 `state_schema.py`(该场景要跨步骤追踪哪些事实)。
-2. 开发 `skills/`(每个 Stage 需要的工具集,**主要工作量所在**)。
-3. 在 `stages.py` 里把 Skill 挂到 Agent,组装成一个个 `Stage`。
+2. 开发 `toolsets/`(每个 Stage 需要的工具集,**主要工作量所在**)。
+3. 在 `stages.py` 里把 ToolSet 挂到 Agent,组装成一个个 `Stage`。
 4. 在 `workflow.py` 里用 Sequence/Loop/ForEach/Checkpoint 拼出流程。
 5. 在 `run.py` 里组装 LLMClient / StateStore / RunContext 并运行。
 

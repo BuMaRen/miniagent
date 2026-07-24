@@ -1,6 +1,6 @@
 # 中短篇小说生成工作流设计
 
-> 本文档描述的是[框架设计(framework-design.md)](framework-design.md)中定义的通用原语(Stage / Loop / ForEach / Checkpoint / State Store / Skill)在"小说生成"这一场景下的一个**具体实例**。流程结构、循环、状态存储都直接复用框架层,本文只负责场景特有的部分:拆出哪些 Stage、State Schema 长什么样、每个 Stage 需要挂载什么 Skill。若要迁移到其他场景(如报告撰写),应复用 framework-design.md 的结构,重写的是本文档这一层。
+> 本文档描述的是[框架设计(framework-design.md)](framework-design.md)中定义的通用原语(Stage / Loop / ForEach / Checkpoint / State Store / ToolSet)在"小说生成"这一场景下的一个**具体实例**。流程结构、循环、状态存储都直接复用框架层,本文只负责场景特有的部分:拆出哪些 Stage、State Schema 长什么样、每个 Stage 需要挂载什么 ToolSet。若要迁移到其他场景(如报告撰写),应复用 framework-design.md 的结构,重写的是本文档这一层。
 
 ## 1. 目标与范围
 
@@ -152,17 +152,17 @@ stages:
   - sequence: [manuscript_assembly_polish, final_qa]
 ```
 
-每个 Stage 需要在其 Agent 上挂载对应 Skill 才能完成具体工作;流程结构本身(sequence/loop/foreach 的嵌套)不因场景而变:
+每个 Stage 需要在其 Agent 上挂载对应 ToolSet 才能完成具体工作;流程结构本身(sequence/loop/foreach 的嵌套)不因场景而变:
 
-| Stage | 对应文档章节 | 框架原语 | 需要开发的 Skill(示例) |
+| Stage | 对应文档章节 | 框架原语 | 需要开发的 ToolSet(示例) |
 |---|---|---|---|
-| input_parsing | 3.1 | Sequence | `input_parsing_skill` |
-| concept_expansion | 3.2 | Sequence | `concept_skill` |
-| character_world_design | 3.3 | Sequence | `character_design_skill`(含写入故事圣经的工具) |
-| outline_generation / outline_critic | 3.4 / 3.5 | Loop | `outline_skill`、`outline_critique_skill` |
-| chapter_drafting / chapter_critic / chapter_revision | 3.6 / 3.8 | ForEach(Loop) | `chapter_writing_skill`、`consistency_check_skill`(读故事圣经做矛盾检测)、`prose_revision_skill` |
-| manuscript_assembly_polish | 3.9 | Sequence | `global_polish_skill`、`foreshadowing_audit_skill` |
-| final_qa | 3.10 | Sequence | `qa_skill` |
+| input_parsing | 3.1 | Sequence | `input_parsing_toolset` |
+| concept_expansion | 3.2 | Sequence | `concept_toolset` |
+| character_world_design | 3.3 | Sequence | `character_design_toolset`(含写入故事圣经的工具) |
+| outline_generation / outline_critic | 3.4 / 3.5 | Loop | `outline_toolset`、`outline_critique_toolset` |
+| chapter_drafting / chapter_critic / chapter_revision | 3.6 / 3.8 | ForEach(Loop) | `chapter_writing_toolset`、`consistency_check_toolset`(读故事圣经做矛盾检测)、`prose_revision_toolset` |
+| manuscript_assembly_polish | 3.9 | Sequence | `global_polish_toolset`、`foreshadowing_audit_toolset` |
+| final_qa | 3.10 | Sequence | `qa_toolset` |
 
 "让它更专业地生产小说"在这套结构下,主要工作量落在打磨 `chapter_writing_skill`(文笔、节奏控制)和 `outline_critique_skill`/`chapter_critic` 的评判标准上——不需要改动上面这份 Workflow 定义的骨架。
 

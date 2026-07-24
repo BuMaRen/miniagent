@@ -16,10 +16,12 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
+from openai import OpenAI
 
 from llm.client import LLMClient, ChatResponse
-from llm.message import Message
+from llm.message import Message, ToolCall
 from tools.schema import ToolSchema
 
 
@@ -33,7 +35,7 @@ class OpenAIClient(LLMClient):
     ) -> None:
         self._model = model
         self._default_params = default_params
-        # TODO: 初始化底层 openai SDK 客户端(api_key, base_url)。
+        self._client = OpenAI(api_key=api_key, base_url=base_url)
 
     def chat(
         self,
@@ -41,5 +43,58 @@ class OpenAIClient(LLMClient):
         tools: list[ToolSchema] | None = None,
         **params: Any,
     ) -> ChatResponse:
-        # TODO: Message[] -> OpenAI messages;调用 API;解析回 ChatResponse。
-        raise NotImplementedError
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": [_to_openai_message(m) for m in messages],
+            **self._default_params,
+            **params,
+        }
+        if tools:
+            payload["tools"] = [t.to_openai() for t in tools]
+
+        completion = self._client.chat.completions.create(**payload)
+        choice = completion.choices[0].message
+
+        tool_calls = [
+            ToolCall(
+                id=tc.id,
+                name=tc.function.name,
+                arguments=json.loads(tc.function.arguments or "{}"),
+            )
+            for tc in (choice.tool_calls or [])
+        ]
+
+        message = Message(
+            role="assistant",
+            content=choice.content,
+            tool_calls=tool_calls,
+        )
+
+        usage = completion.usage.model_dump() if completion.usage else {}
+
+        return ChatResponse(message=message, tool_calls=tool_calls, usage=usage)
+
+def _to_openai_message(message: Message) -> dict[str, Any]:
+    """把框架的 Message 转成 OpenAI 的 messages 结构。"""
+    if message.role == "tool":
+        return {
+            "role": "tool",
+            "content": message.content or "",
+            "tool_call_id": message.tool_call_id,
+        }
+
+    result: dict[str, Any] = {"role": message.role, "content": message.content}
+
+    if message.tool_calls:
+        result["tool_calls"] = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.name,
+                    "arguments": json.dumps(tc.arguments),
+                },
+            }
+            for tc in message.tool_calls
+        ]
+    return result

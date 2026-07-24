@@ -1,6 +1,6 @@
 """ToolRegistry —— 工具注册表。
 
-统一保管"工具名 -> (函数, schema)"的映射,供 Agent 加载 Skill 时登记、
+统一保管"工具名 -> (函数, schema)"的映射,供 Agent 加载 ToolSet 时登记、
 供 LLMClient.chat 取用 schema 列表、供 ToolExecutor 按名查函数执行。
 """
 
@@ -32,7 +32,7 @@ class ToolRegistry:
         return True
 
     def unregister(self, name: str) -> None:
-        """移除一个工具(load_skill(mode="replace") 会用到)。"""
+        """移除一个工具(load_toolset(mode="replace") 会用到)。"""
         self._funcs.pop(name, None)
         self._schemas.pop(name, None)
 

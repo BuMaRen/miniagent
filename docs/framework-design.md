@@ -1,21 +1,21 @@
 # 可复用 AI 工作流框架设计
 
-本文档定义的是**与场景无关**的工作流引擎抽象。任何具体场景(小说生成、代码审查、报告撰写…)都不修改这一层,而是通过"提供 State Schema + 编写 Workflow 定义 + 挂载/开发 Skill"在其上二次开发。小说生成工作流([workflow-design.md](workflow-design.md))是这套抽象的第一个实例,不是框架本身。
+本文档定义的是**与场景无关**的工作流引擎抽象。任何具体场景(小说生成、代码审查、报告撰写…)都不修改这一层,而是通过"提供 State Schema + 编写 Workflow 定义 + 挂载/开发 ToolSet"在其上二次开发。小说生成工作流([workflow-design.md](workflow-design.md))是这套抽象的第一个实例,不是框架本身。
 
 ## 1. 设计目标
 
 - **场景无关**:引擎只提供结构(阶段怎么串联、状态怎么读写、循环怎么退出),不内置任何"大纲""章节"之类的语义。
 - **组合优于内置**:复杂流程由少量控制流原语(顺序/循环/遍历/断点)组合而成,而不是为每种流程单独写死代码。
-- **能力通过 Skill 挂载,而非改结构**:换场景时,期望的改动是"换一套 Skill + 换一份 State Schema",而不是重新设计流程图。
+- **能力通过 ToolSet 挂载,而非改结构**:换场景时,期望的改动是"换一套 ToolSet + 换一份 State Schema",而不是重新设计流程图。
 
 ## 2. 核心概念一览
 
 | 概念 | 作用 | 场景相关? |
 |---|---|---|
 | Node | **协议(接口)**,规定"可执行节点长什么样":有 `name` + `run(ctx, inputs)`。Stage 与四个控制流原语都是它的实现 | 否(接口) |
-| Stage | 最小执行单元,是 Node 的**叶子实现**(真正产出内容),声明 input/output 契约 | 否(容器);场景相关的是挂在它上面的 Agent/Skill |
-| Agent | LLM + ToolRegistry + Skills + Memory,Stage 的典型执行体 | 否(结构),Skill 决定它做什么 |
-| Skill | 一组工具(function + schema),赋予 Agent 特定能力 | **是** —— 这是场景方二次开发的主要挂载点 |
+| Stage | 最小执行单元,是 Node 的**叶子实现**(真正产出内容),声明 input/output 契约 | 否(容器);场景相关的是挂在它上面的 Agent/ToolSet |
+| Agent | LLM + ToolRegistry + ToolSets + Memory,Stage 的典型执行体 | 否(结构),ToolSet 决定它做什么 |
+| ToolSet | 一组工具(function + schema),赋予 Agent 特定能力。注意:这是代码装配期显示挂载的工具组,和 Claude/OpenAI 里"运行时由模型自主发现"的 Skill 概念不是一回事(见 §4)| **是** —— 这是场景方二次开发的主要挂载点 |
 | State Store | 通用的结构化共享状态读写接口 | 否(接口);字段语义由场景方提供的 Schema 决定 |
 | Loop(Critic-Reviser) | "生成→评审→修订→直到达标或超限"的通用循环原语 | 否 |
 | ForEach | 对列表中每个元素重复执行子流程 | 否 |
@@ -77,19 +77,21 @@ Stage:                              # 实现 Node 协议
 
 注意 **`writes` 是可选的、默认为空——不是每个 Stage 都会写 State Store。** 数据有两条通道:①上一个节点的 `outputs` 直接作为下一个节点的 `inputs`(揮发,不落 State);②只有 `writes` 声明的切片才写回 State Store。仅当某个事实需要被**非相邻的后段**读取(如故事圣经在角色设计阶段写、逐章撰写/统稿阶段才读),或需要追加历史 / 支持断点恢复时,才写 State。Loop 内 critic 的 `{passed, feedback}` 只被相邻的 reviser 消费,通常走通道①、不落 State。
 
-Stage 不关心"怎么产出输出"——它只是一个契约。同一个 Stage 定义换一个 executor(比如换一个挂载了不同 Skill 的 Agent),就能在不同场景里做完全不同的事,这是场景可替换性的关键。
+Stage 不关心"怎么产出输出"——它只是一个契约。同一个 Stage 定义换一个 executor(比如换一个挂载了不同 ToolSet 的 Agent),就能在不同场景里做完全不同的事,这是场景可替换性的关键。
 
-## 4. Agent 与 Skill —— 场景能力的挂载点
+## 4. Agent 与 ToolSet —— 场景能力的挂载点
 
-延续框架原有的概念:**Agent = LLM Client + ToolRegistry + Skills(工具集) + Memory**。Skill 是一组 `(tool_func, schema)`,可以被加载进 Agent,决定这个 Agent 具备什么能力。
+延续框架原有的概念:**Agent = LLM Client + ToolRegistry + ToolSets(工具集) + Memory**。ToolSet 是一组 `(tool_func, schema)`,可以被加载进 Agent,决定这个 Agent 具备什么能力。
 
-这是本框架回应"二次开发只需要装 Skill"这个诉求的核心机制:
+> **与 Claude/OpenAI 的 "Skill" 概念的区别**:Claude/OpenAI 的 Skill 是运行时机制——一个磁盘目录(带元数据),模型在对话过程中自主发现、按需渐进式家在。本框架的 ToolSet 是装配期机制——由场景方在组装 Agent 的代码里显示挂载,决定这个 Agent 从一开始具备什么能力,不涉及运行时的目录扫描或模型自主发现。两者解决的事不同层面的问题,命名上刻意使用"ToolSet"以免混淆。
+
+这是本框架回应"二次开发只需要装 ToolSet"这个诉求的核心机制:
 
 - Stage 的结构(它在流程图里的位置、它的输入输出契约、它是否处于某个 Loop/ForEach 里)是**引擎层**决定的,不因场景而变。
-- Stage 具体"怎么把输入变成输出"是**Skill 层**决定的:给同一个抽象的"生成"Stage 挂载不同 Skill,就得到不同场景下的能力。
-- 给同一个抽象的"评审"Stage 挂载 `novel_critique_skill`,就是小说评审;挂载 `code_review_skill`,就是代码评审——Stage 本身、它所在的 Loop 结构完全不用改。
+- Stage 具体"怎么把输入变成输出"是**ToolSet 层**决定的:给同一个抽象的"生成"Stage 挂载不同 ToolSet,就得到不同场景下的能力。
+- 给同一个抽象的"评审"Stage 挂载 `novel_critique_toolset`,就是小说评审;挂载 `code_review_toolset`,就是代码评审——Stage 本身、它所在的 Loop 结构完全不用改。
 
-也就是说,专业化一个场景(比如让它"专业地生产小说")的典型工作量是:**写清楚这个场景需要哪些 Skill,并把它们挂到对应 Stage 上**,而不是重新设计流程图。
+也就是说,专业化一个场景(比如让它"专业地生产小说")的典型工作量是:**写清楚这个场景需要哪些 ToolSet,并把它们挂到对应 Stage 上**,而不是重新设计流程图。
 
 ## 5. State Store —— 通用共享状态接口
 
@@ -156,7 +158,7 @@ Checkpoint:
 
 ## 7. Workflow 定义 —— 场景方的组合方式
 
-场景方通过组合以上原语 + 提供 State Schema + 挂载 Skill 来定义一个具体工作流,形式上类似:
+场景方通过组合以上原语 + 提供 State Schema + 挂载 ToolSet 来定义一个具体工作流,形式上类似:
 
 ```yaml
 workflow: <场景名称>
@@ -185,14 +187,14 @@ stages:
 
   - sequence: [stage_e, stage_f]
 
-skills:
-  stage_a: [skill_x]
-  stage_c: [skill_y, skill_z]
-  stage_d: [skill_w]
-  # ...每个 Stage 的 executor(Agent)挂载哪些 Skill
+toolsets:
+  stage_a: [toolset_x]
+  stage_c: [toolset_y, toolset_z]
+  stage_d: [toolset_w]
+  # ...每个 Stage 的 executor(Agent)挂载哪些 ToolSet
 ```
 
-这份定义完全没有出现"大纲""章节""小说"这类词——它是纯结构。小说生成工作流就是往这个结构里填入具体的 Stage、Skill 和 State Schema 之后得到的一个实例。
+这份定义完全没有出现"大纲""章节""小说"这类词——它是纯结构。小说生成工作流就是往这个结构里填入具体的 Stage、ToolSet 和 State Schema 之后得到的一个实例。
 
 ## 8. 二次开发指南
 
@@ -203,7 +205,7 @@ skills:
 3. **识别需要质检的环节**,给对应 Stage 套一层 `Loop`(producer/critic/reviser + 退出条件)。
 4. **识别需要对列表重复处理的环节**(如"逐章"/"逐条"),套一层 `ForEach`。
 5. **决定哪些节点需要人工介入**,插入 `Checkpoint`。
-6. **为每个 Stage 开发/挂载 Skill**——这是主要的开发工作量所在,流程结构(2–5 步)通常一次设计好之后很少再变。
+6. **为每个 Stage 开发/挂载 ToolSet**——这是主要的开发工作量所在,流程结构(2–5 步)通常一次设计好之后很少再变。
 7. 组装成 Workflow 定义并运行。
 
 ## 9. 已验证的实例:小说生成
@@ -215,7 +217,7 @@ skills:
 - 逐章撰写(3.6)是 `ForEach(chapters, body=Loop(...))` 的实例化。
 - 故事圣经([story-bible-schema.md](story-bible-schema.md))是 State Schema 的一个具体实例,不属于引擎本身。
 
-要让这套流程"更专业地生产小说",在当前设计下应优先考虑:开发更强的 `chapter_writing_skill`/`novel_critique_skill` 等 Skill,或调整 State Schema 里追踪的字段——都不需要改动 Stage/Loop/ForEach 这层结构。
+要让这套流程"更专业地生产小说",在当前设计下应优先考虑:开发更强的 `chapter_writing_toolset`/`novel_critique_toolset` 等 ToolSet,或调整 State Schema 里追踪的字段——都不需要改动 Stage/Loop/ForEach 这层结构。
 
 ## 10. 非目标(Out of Scope)
 
@@ -224,6 +226,6 @@ skills:
 - 具体 Prompt 内容与措辞
 - 具体 LLM Provider 的选择与调用方式
 - 具体的 UI/CLI 交互形式
-- Skill 内部工具的实现细节
+- ToolSet 内部工具的实现细节
 
 这些都留给实现层和场景层各自决定,以保证引擎本身能被不同场景复用。

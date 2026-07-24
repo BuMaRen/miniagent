@@ -49,6 +49,14 @@ class ToolSchema:
             },
         }
 
+    def to_anthropic(self) -> dict[str, Any]:
+        """转成 Anthropic tool-use 的 tool 定义结构"""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.parameters,
+        }
+
 
 def schema_from_func(func: Callable[..., Any]) -> ToolSchema:
     """从函数签名与 docstring 自动生成 ToolSchema。"""

@@ -1,6 +1,6 @@
 """Agent —— Stage 的典型执行体(docs/framework-design.md §4)。
 
-Agent 把 LLM、工具、技能、记忆组装在一起,内部驱动一个 agentic loop
+Agent 把 LLM、工具、工具集、记忆组装在一起,内部驱动一个 agentic loop
 (模型思考 -> 调用工具 -> 观察结果 -> 继续,直到产出最终输出)来完成一个 Stage。
 它对外暴露成 engine.stage.Executor 的签名 (ctx, inputs) -> outputs。
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.skill import Skill
+from agent.toolset import ToolSet
 from agent.memory import ConversationMemory
 from llm.client import LLMClient
 from tools.registry import ToolRegistry
@@ -26,7 +26,7 @@ class Agent:
         registry:     工具注册表。
         executor:     工具执行器。
         memory:       对话记忆。
-        skills:       已加载的技能列表。
+        toolsets:       已加载的工具集列表。
         max_steps:    单次运行内 agentic loop 的最大步数,防止失控。
     """
 
@@ -34,21 +34,21 @@ class Agent:
     registry: ToolRegistry
     executor: ToolExecutor
     memory: ConversationMemory
-    skills: list[Skill] = field(default_factory=list)
+    toolsets: list[ToolSet] = field(default_factory=list)
     max_steps: int = 12
 
-    def load_skill(self, skill: Skill, mode: str = "append") -> None:
-        """加载一个 Skill:把其工具注册进 registry。
+    def load_toolset(self, toolset: ToolSet, mode: str = "append") -> None:
+        """加载一个 ToolSet:把其工具注册进 registry。
 
         Args:
-            skill: 待加载技能。
+            toolset: 待加载工具集。
             mode:  "append" 保留已有工具(默认);"replace" 先清空再加载。
         """
         # TODO:
-        #   - mode == "replace" 时清空 registry 中由 Skill 注册的工具。
-        #   - 遍历 skill.tools,调用 self.registry.register(schema.name, func, schema);
+        #   - mode == "replace" 时清空 registry 中由 ToolSet 注册的工具。
+        #   - 遍历 toolset.tools,调用 self.registry.register(schema.name, func, schema);
         #     遇到重名给出清晰错误。
-        #   - self.skills.append(skill)
+        #   - self.toolsets.append(toolset)
         raise NotImplementedError
 
     def run(self, ctx: "RunContext", inputs: dict[str, Any]) -> dict[str, Any]:
