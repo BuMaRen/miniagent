@@ -2,37 +2,7 @@
 
 一个**与场景无关**的可复用 AI 工作流框架:提供 Stage(阶段)、ToolSet(能力挂载)、State Store(共享状态)、Loop(评审-修订循环)、ForEach(遍历子流程)、Checkpoint(人工断点)等通用构件。二次开发一个具体场景,通常只需要"定义 State Schema + 拼装这些原语 + 挂载/开发对应 ToolSet",而不需要重新设计流程结构。
 
-当前第一个实例场景:**根据用户给定的题材,自动生成一篇中短篇小说。** 要让它"更专业地生产小说",预期的改动方式是打磨/扩充对应 Stage 上挂载的 ToolSet(如章节撰写、一致性评审),而不是改动引擎结构——详见 [docs/framework-design.md](docs/framework-design.md) §8。
-
-## 为什么需要拆阶段,而不是一次性生成
-
-直接让模型"根据题材写一篇小说"通常会遇到:大纲阶段的问题被带入全文导致返工代价极高、章节之间人物/设定前后矛盾、长文本超出上下文窗口后细节丢失、文笔和节奏难以自动把控。因此工作流按阶段拆解,并引入显式的状态存储与评审循环来约束质量——这些正是框架层要沉淀的通用构件。
-
-## 小说生成工作流概览(框架的一个实例)
-
-```mermaid
-flowchart TD
-    A[题材输入] --> B[立意扩展<br/>logline/主题/核心冲突]
-    B --> C[角色与世界观设计]
-    C --> D[大纲与章节节拍生成]
-    D --> E{大纲评审}
-    E -- 不通过 --> D
-    E -- 通过 --> F[逐章撰写循环]
-    F --> G{章节审校}
-    G -- 不通过 --> F
-    G -- 通过 --> H{还有下一章?}
-    H -- 是 --> F
-    H -- 否 --> I[全文统稿与润色]
-    I --> J[最终校验与输出]
-
-    K[(故事圣经<br/>人物/时间线/伏笔)] -.读写.- C
-    K -.读写.- D
-    K -.读写.- F
-    K -.读写.- G
-    K -.回收检查.- I
-```
-
-图中的 `{大纲评审}`/`{章节审校}` 是同一个 Loop 原语的两次实例化,`故事圣经` 是 State Store 的一个场景实例——细节见下方文档。
+当前已有一个示例场景用于验证这套抽象是否好用,具体内容见 [scenarios/README.md](scenarios/README.md)。二次开发/专业化某个场景时,预期的改动方式是打磨/扩充对应 Stage 上挂载的 ToolSet,而不是改动引擎结构——详见 [docs/framework-design.md](docs/framework-design.md) §8。
 
 ## 项目定位
 
@@ -87,6 +57,16 @@ miniagent/
 3. **Loop 的退出与超限策略** — "什么叫合格"由 critic 的输出决定,引擎不做假设;超限有 `accept_last / escalate_to_checkpoint / raise` 三种策略,杜绝死循环。
 4. **两种记忆分离** — `agent/memory.py` 是单次 Agent 运行内的短期对话记忆;`state/` 是跨 Stage 的长期结构化事实。用摘要保证连贯,用结构化状态保证事实一致,职责分开。
 5. **能力通过 ToolSet 挂载,而非改结构** — 换场景/做专业化的预期改动是"换一套 ToolSet + 换一份 State Schema",Stage/Loop/ForEach 的骨架不动。
+
+## 运行测试
+
+框架层的单元测试在 `tests/`(镜像 `engine`/`agent`/`state`/`llm`/`tools` 的目录结构),只用标准库 `unittest`,无需额外依赖即可跑：
+
+```
+python3 -m unittest discover -s tests -t .
+```
+
+`tests/llm/test_openai_provider.py`、`tests/llm/test_anthropic_provider.py` 覆盖两个 Provider 的消息格式转换;若未安装 `openai`/`anthropic`(`requirements.txt` 里的两个依赖),这两个文件会自动跳过而非报错。
 
 ## 二次开发一个新场景
 

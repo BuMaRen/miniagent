@@ -1,0 +1,43 @@
+import unittest
+
+try:
+    from llm.providers.openai import _to_openai_message
+    _IMPORT_ERROR = None
+except ImportError as e:  # pragma: no cover - depends on optional dependency
+    _IMPORT_ERROR = e
+
+from llm.message import Message, ToolCall
+
+
+@unittest.skipIf(_IMPORT_ERROR is not None, f"openai package not installed: {_IMPORT_ERROR}")
+class ToOpenAIMessageTests(unittest.TestCase):
+    def test_plain_message(self):
+        result = _to_openai_message(Message(role="user", content="hi"))
+        self.assertEqual(result, {"role": "user", "content": "hi"})
+
+    def test_tool_result_message_uses_tool_call_id(self):
+        msg = Message(role="tool", content="42", tool_call_id="c1")
+        result = _to_openai_message(msg)
+        self.assertEqual(result, {"role": "tool", "content": "42", "tool_call_id": "c1"})
+
+    def test_tool_result_message_with_no_content_defaults_to_empty_string(self):
+        msg = Message(role="tool", content=None, tool_call_id="c1")
+        result = _to_openai_message(msg)
+        self.assertEqual(result["content"], "")
+
+    def test_assistant_message_with_tool_calls(self):
+        msg = Message(
+            role="assistant",
+            content=None,
+            tool_calls=[ToolCall(id="c1", name="lookup", arguments={"q": "x"})],
+        )
+        result = _to_openai_message(msg)
+        self.assertEqual(result["role"], "assistant")
+        self.assertEqual(len(result["tool_calls"]), 1)
+        self.assertEqual(result["tool_calls"][0]["id"], "c1")
+        self.assertEqual(result["tool_calls"][0]["function"]["name"], "lookup")
+        self.assertEqual(result["tool_calls"][0]["function"]["arguments"], '{"q": "x"}')
+
+
+if __name__ == "__main__":
+    unittest.main()

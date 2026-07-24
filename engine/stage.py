@@ -84,7 +84,9 @@ class Stage:
         if self.output_schema is not None:
             self.output_schema.validate(outputs)
         if self.writes:
-            ctx.state.patch(self.writes, outputs)
+            for path in self.writes:
+                if path in outputs:
+                    ctx.state.patch(path, outputs[path])
         if ctx.hooks and ctx.hooks.after_stage:
             ctx.hooks.after_stage(self.name, outputs)
         return outputs
