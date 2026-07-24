@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any
 
 from engine.stage import Node
-from engine.context import RunContext
+from engine.context import CheckpointRequest, RunContext
 
 
 class OnExceed(str, Enum):
@@ -81,7 +81,14 @@ class Loop:
         elif self.on_exceed == OnExceed.ESCALATE_TO_CHECKPOINT:
             if ctx.checkpoint_handler is None:
                 raise RuntimeError("Loop 超限,但 RunContext 未配置 checkpoint_handler")
-            return ctx.checkpoint_handler(self.name, current)
+            # 升级为人工裁决:把"最后一版草稿"作为 context 素材交给人参考,
+            # 由 handler 返回人工敲定的最终产出。
+            request = CheckpointRequest(
+                name=self.name,
+                prompt=f"Loop {self.name} 超过 max_iterations={self.max_iterations} 仍未通过,请人工裁决。",
+                context=current,
+            )
+            return ctx.checkpoint_handler(request)
         elif self.on_exceed == OnExceed.RAISE:
             raise LoopExceededError(
                 f"Loop {self.name} 超过 max_iterations={self.max_iterations} 且未通过"

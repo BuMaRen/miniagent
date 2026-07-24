@@ -10,7 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from engine.context import RunContext
+from engine.context import CheckpointRequest, RunContext
+from state.schema import StateSchema
 
 
 @dataclass
@@ -19,27 +20,59 @@ class Checkpoint:
 
     Attributes:
         name:                断点名称(如 "confirm_outline")。
-        resume_input_schema: 恢复执行所需外部输入的契约(如 {"approved": bool, "note": str})。
+        resume_input_schema: 恢复输入应满足的契约(一份 StateSchema,声明如
+                             {"approved": bool, "note": str} 之类的字段)。handler
+                             返回后由本原语委托 schema.validate 校验;None 表示不校验。
         prompt:              给人工看的提示文案(可选)。
     """
 
     name: str
-    resume_input_schema: Any | None = None
+    resume_input_schema: StateSchema | None = None
     prompt: str | None = None
 
     def run(self, ctx: RunContext, inputs: dict[str, Any]) -> dict[str, Any]:
-        # TODO:
         #   1. 触发 on_checkpoint hook。
-        #   2. 若 ctx.checkpoint_handler 存在:调用它获取外部输入,
-        #      用 resume_input_schema 校验后,合并进 inputs 返回。
+        #   2. 若 ctx.checkpoint_handler 存在:把本断点封成 CheckpointRequest 交给它,
+        #      拿回人工输入;用 resume_input_schema 校验(契约由引擎强制,而非信任
+        #      业务侧 handler),通过后合并进 inputs 返回。
         #   3. 若无 handler(非交互运行):抛出 CheckpointPause,由宿主持久化
         #      当前状态、择机恢复(支持长时间挂起的异步流程)。
-        raise NotImplementedError
+        if ctx.hooks and ctx.hooks.on_checkpoint:
+            ctx.hooks.on_checkpoint(self.name)
+        #   0. 恢复路径:挂起期间宿主已把人工输入放进 ctx.resume。若这份恢复点正是
+        #      冲着本断点来的,就认领它(同样由引擎强制 schema 校验),并入 inputs 后
+        #      清空 ctx.resume 继续——不再暂停,也不触发 handler。
+        if ctx.resume is not None and ctx.resume.checkpoint_name == self.name:
+            resume_input = ctx.resume.resume_input
+            if self.resume_input_schema is not None:
+                self.resume_input_schema.validate(resume_input)
+            inputs.update(resume_input)
+            ctx.resume = None
+            return inputs
+        if ctx.checkpoint_handler:
+            request = CheckpointRequest(name=self.name, prompt=self.prompt)
+            resume_input = ctx.checkpoint_handler(request)
+            if self.resume_input_schema is not None:
+                self.resume_input_schema.validate(resume_input)
+            inputs.update(resume_input)
+            return inputs
+        raise CheckpointPause(self.name)
 
 
 class CheckpointPause(Exception):
-    """在无同步 handler 时抛出,携带断点名与当前上下文,供宿主持久化后恢复。"""
+    """在无同步 handler 时抛出,携带断点名与当前上下文,供宿主持久化后恢复。
 
-    def __init__(self, checkpoint_name: str) -> None:
+    node_index / inputs 在抛出时为空,由外层 Workflow.run 捕获后回填(Checkpoint
+    自身不知道它在顶层节点序列里的位置);宿主据这三项即可构造 ResumePoint。
+    """
+
+    def __init__(
+        self,
+        checkpoint_name: str,
+        node_index: int | None = None,
+        inputs: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(f"workflow paused at checkpoint: {checkpoint_name}")
         self.checkpoint_name = checkpoint_name
+        self.node_index = node_index
+        self.inputs = inputs

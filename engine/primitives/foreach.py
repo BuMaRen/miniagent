@@ -65,7 +65,7 @@ class ForEach:
 
         count = 0
         # condition:index < len(items)
-        while ctx.state.get(index_path, 0) < len(items):
+        while ctx.state.get(index_path, 0) < len(items):    
             i = ctx.state.get(index_path, 0)
 
             # bind:把当前元素发布到游标,body 用普通 reads 读取它。
