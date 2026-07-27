@@ -1,0 +1,11 @@
+# 本场景的默认输入(对应 docs/workflow-design.md §3.1 的 StoryBrief)。
+# 只有 topic 是必填项,其余留空/省略时由 stages.input_parsing_executor 填默认值。
+topic: >-
+  现代人意外穿越到西汉汉武帝建元年间的长安,起初只是想弄清楚自己为何、
+  如何来到这里并努力活下去,后来机缘之下随张骞出使西域,亲历"凿空"西域的
+  艰险历程。
+genre: 历史·现实主义
+pov: 第一人称
+tone: 沉稳克制,重考据与心理真实,不写无所不能的穿越爽文
+structure_template: 三幕式
+target_word_count: [8000, 20000]

@@ -1,0 +1,42 @@
+# 小说生成工作流的声明式定义 —— docs/workflow-design.md §4 的具体落地。
+#
+# 这份文件本身不含任何 Stage 的实现细节(那些在 stages.py 里),只描述
+# Sequence/Loop/ForEach/Checkpoint 怎么拼接;由 workflow.py 读取后,
+# 结合 stages.build_stage_registry() 产出的 NodeRegistry,交给
+# engine.workflow.Workflow.from_spec 组装成可执行的 Workflow。
+workflow: novel_generation
+state_schema: story_bible
+
+stages:
+  - sequence:
+      - input_parsing
+      - concept_expansion
+      - character_world_design
+
+  - loop:
+      name: outline_loop
+      producer: outline_generation
+      critic: outline_critic
+      reviser: outline_generation
+      max_iterations: 3
+      on_exceed: escalate_to_checkpoint
+
+  - checkpoint:
+      name: confirm_outline
+      prompt: "大纲已生成,请确认是否按此大纲进入逐章撰写(approved: true/false)。"
+
+  - foreach:
+      name: chapter_loop
+      items_path: story_bible.chapters
+      body:
+        loop:
+          name: chapter_review_loop
+          producer: chapter_drafting
+          critic: chapter_critic
+          reviser: chapter_revision
+          max_iterations: 3
+          on_exceed: escalate_to_checkpoint
+
+  - sequence:
+      - manuscript_assembly_polish
+      - final_qa
