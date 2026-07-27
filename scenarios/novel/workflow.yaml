@@ -29,13 +29,17 @@ stages:
       name: chapter_loop
       items_path: story_bible.chapters
       body:
-        loop:
-          name: chapter_review_loop
-          producer: chapter_drafting
-          critic: chapter_critic
-          reviser: chapter_revision
-          max_iterations: 3
-          on_exceed: escalate_to_checkpoint
+        sequence:
+          - loop:
+              name: chapter_review_loop
+              producer: chapter_drafting
+              critic: chapter_critic
+              reviser: chapter_revision
+              max_iterations: 3
+              on_exceed: escalate_to_checkpoint
+          - checkpoint:
+              name: chapter_pause
+              prompt: "本章已完成审校,是否继续下一章?"
 
   - sequence:
       - manuscript_assembly_polish

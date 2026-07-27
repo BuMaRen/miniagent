@@ -111,6 +111,14 @@ def make_checkpoint_handler(auto_approve: bool):
                 return {"approved": True}
             answer = input("是否批准当前大纲? [y/N] ").strip().lower()
             return {"approved": answer == "y"}
+        if request.name == "chapter_pause":
+            if auto_approve:
+                return {}
+            answer = input("是否继续下一章? [Y/n] ").strip().lower()
+            if answer in ("n", "no"):
+                print("[info] 已选择暂停,将保存进度并落地当前产物,可稍后续跑。")
+                raise CheckpointPause(request.name)
+            return {}
         print("[warn] Loop 已达最大迭代次数仍未通过评审,自动接受最后一版,请事后复核。")
         return request.context or {}
 
@@ -164,7 +172,11 @@ def main() -> None:
         outputs = workflow.run(ctx, brief)
     except CheckpointPause as pause:
         _save_resume_point(state_path, pause.node_index, pause.inputs, pause.checkpoint_name)
+        written = land_output(state_store.snapshot(), args.output_dir)
         print(f"流程在断点 {pause.checkpoint_name!r} 处暂停,状态已保存到 {state_path},可稍后续跑。")
+        print("\n已落地当前产物:")
+        for label, path in written.items():
+            print(f"  {label}: {path}")
         return
     except WorkflowFailure as failure:
         _save_resume_point(state_path, failure.node_index, failure.inputs, failure.node_name)
