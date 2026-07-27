@@ -87,6 +87,8 @@ def build_llm_client() -> LLMClient:
         return OpenAIClient(
             api_key=os.environ["OPENAI_API_KEY"],
             model=os.environ.get("NOVEL_MODEL", "gpt-4o"),
+            base_url=os.environ.get("OPENAI_API_BASE_URL", "http://localhost:11434/v1"),
+            max_tokens=16384,
         )
     raise RuntimeError(
         "需要设置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY 才能真实运行本场景;"
