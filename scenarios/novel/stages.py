@@ -19,9 +19,10 @@ from agent.memory import ConversationMemory
 from engine.context import RunContext
 from engine.stage import Stage
 from llm.client import LLMClient
+from state.schema import StateSchema
 from tools.registry import ToolRegistry
 
-from scenarios.novel.state_schema import STORY_BIBLE_SCHEMA
+from scenarios.novel.state_schema import CHAPTER, CHARACTER, FORESHADOWING, STORY_BIBLE_SCHEMA, WORLD_ENTRY
 from scenarios.novel.toolsets.research import RESEARCH_TOOLSET
 from scenarios.novel.toolsets.qa import QA_TOOLSET, count_chinese_characters
 
@@ -57,7 +58,10 @@ _JSON_ONLY = (
 
 
 def _make_agent(
-    client: LLMClient, system_prompt: str, toolsets: tuple = ()
+    client: LLMClient,
+    system_prompt: str,
+    toolsets: tuple = (),
+    output_schema: StateSchema | None = None,
 ) -> Agent:
     registry = ToolRegistry()
     agent = Agent(
@@ -65,6 +69,7 @@ def _make_agent(
         memory=ConversationMemory(system_prompt=system_prompt),
         registry=registry,
         max_steps=_DEFAULT_MAX_STEPS,
+        output_schema=output_schema,
     )
     for toolset in toolsets:
         agent.load_toolset(toolset)
@@ -119,13 +124,25 @@ core_conflict(核心冲突:谁 vs 谁/什么,为什么无法回避)。这一步�
 """
 
 
+CONCEPT_EXPANSION_OUTPUT_SCHEMA = StateSchema(
+    "concept_expansion_output",
+    {"story_bible.meta": {"logline": str, "theme": str, "core_conflict": str}},
+)
+
+
 def build_concept_expansion_stage(client: LLMClient) -> Stage:
-    agent = _make_agent(client, _CONCEPT_PROMPT, toolsets=(RESEARCH_TOOLSET,))
+    agent = _make_agent(
+        client,
+        _CONCEPT_PROMPT,
+        toolsets=(RESEARCH_TOOLSET,),
+        output_schema=CONCEPT_EXPANSION_OUTPUT_SCHEMA,
+    )
     return Stage(
         name="concept_expansion",
         executor=agent.run,
         reads=["story_bible.meta"],
         writes=["story_bible.meta"],
+        output_schema=CONCEPT_EXPANSION_OUTPUT_SCHEMA,
     )
 
 
@@ -145,6 +162,8 @@ _CHARACTER_WORLD_PROMPT = f"""你负责小说创作流程中的"角色与世界�
    与盘查)——现实主义故事不强求脸谱化反派。
 3. 补充最小必要的世界观规则(只写情节会用到的规则,如路引制度、市集与宵禁、
    张骞出使西域的历史背景),每条要标注 established_in_chapter(通常是 1)。
+这一阶段还没有章节可记录,每个角色的 status_log 留空数组即可;后续阶段若要
+往里追加,元素形状必须是 {{"after_chapter": 1, "state": "..."}}。
 
 {_JSON_ONLY}
 输出格式:
@@ -152,20 +171,36 @@ _CHARACTER_WORLD_PROMPT = f"""你负责小说创作流程中的"角色与世界�
   "story_bible.meta": {{"title": "..."}},
   "story_bible.characters": [{{"id": "...", "name": "...", "role": "...",
     "goal": "...", "motivation": "...", "flaw": "...", "arc": "...",
-    "relationships": [], "status_log": []}}],
+    "relationships": [{{"target_id": "另一个角色的 id", "relation": "..."}}], "status_log": []}}],
   "story_bible.world": [{{"id": "...", "name": "...", "description": "...",
     "established_in_chapter": 1}}]
 }}
 """
 
 
+CHARACTER_WORLD_DESIGN_OUTPUT_SCHEMA = StateSchema(
+    "character_world_design_output",
+    {
+        "story_bible.meta": {"title": str},
+        "story_bible.characters": [CHARACTER],
+        "story_bible.world": [WORLD_ENTRY],
+    },
+)
+
+
 def build_character_world_design_stage(client: LLMClient) -> Stage:
-    agent = _make_agent(client, _CHARACTER_WORLD_PROMPT, toolsets=(RESEARCH_TOOLSET,))
+    agent = _make_agent(
+        client,
+        _CHARACTER_WORLD_PROMPT,
+        toolsets=(RESEARCH_TOOLSET,),
+        output_schema=CHARACTER_WORLD_DESIGN_OUTPUT_SCHEMA,
+    )
     return Stage(
         name="character_world_design",
         executor=agent.run,
         reads=["story_bible.meta"],
         writes=["story_bible.meta", "story_bible.characters", "story_bible.world"],
+        output_schema=CHARACTER_WORLD_DESIGN_OUTPUT_SCHEMA,
     )
 
 
@@ -182,7 +217,8 @@ _OUTLINE_PROMPT = f"""你负责小说创作流程中的"大纲与节拍生成"�
 你的任务:按 meta.structure_template 生成章节列表,中短篇建议 6-15 章,
 单章 1000-2500 字;每章包含 index/title/beat_summary(该章目标、关键事件、
 结尾钩子、涉及的角色与伏笔)。同时规划伏笔(foreshadowing):哪一章埋下、
-计划哪一章回收。
+计划哪一章回收——payoff_chapter 请直接填入计划回收的具体章节号,不要留
+null,"计划哪一章回收"这个决定就应该在这一步做出,不要留给后续阶段猜。
 
 {_JSON_ONLY}
 输出格式:
@@ -190,18 +226,30 @@ _OUTLINE_PROMPT = f"""你负责小说创作流程中的"大纲与节拍生成"�
   "story_bible.chapters": [{{"index": 1, "title": "...", "beat_summary": "...",
     "draft_summary": "", "text": "", "word_count": 0, "status": "planned"}}],
   "story_bible.foreshadowing": [{{"id": "...", "planted_in_chapter": 1,
-    "description": "...", "payoff_chapter": null, "status": "planted"}}]
+    "description": "...", "payoff_chapter": 5, "status": "planted"}}]
 }}
 """
 
 
+OUTLINE_GENERATION_OUTPUT_SCHEMA = StateSchema(
+    "outline_generation_output",
+    {"story_bible.chapters": [CHAPTER], "story_bible.foreshadowing": [FORESHADOWING]},
+)
+
+
 def build_outline_generation_stage(client: LLMClient) -> Stage:
-    agent = _make_agent(client, _OUTLINE_PROMPT, toolsets=(RESEARCH_TOOLSET,))
+    agent = _make_agent(
+        client,
+        _OUTLINE_PROMPT,
+        toolsets=(RESEARCH_TOOLSET,),
+        output_schema=OUTLINE_GENERATION_OUTPUT_SCHEMA,
+    )
     return Stage(
         name="outline_generation",
         executor=agent.run,
         reads=["story_bible.meta", "story_bible.characters", "story_bible.world"],
         writes=["story_bible.chapters", "story_bible.foreshadowing"],
+        output_schema=OUTLINE_GENERATION_OUTPUT_SCHEMA,
     )
 
 
@@ -223,12 +271,16 @@ story_bible.meta / story_bible.characters 供你核对呼应关系。
 """
 
 
+CRITIC_OUTPUT_SCHEMA = StateSchema("critic_output", {"passed": bool, "feedback": str})
+
+
 def build_outline_critic_stage(client: LLMClient) -> Stage:
-    agent = _make_agent(client, _OUTLINE_CRITIC_PROMPT)
+    agent = _make_agent(client, _OUTLINE_CRITIC_PROMPT, output_schema=CRITIC_OUTPUT_SCHEMA)
     return Stage(
         name="outline_critic",
         executor=agent.run,
         reads=["story_bible.meta", "story_bible.characters"],
+        output_schema=CRITIC_OUTPUT_SCHEMA,
     )
 
 
@@ -253,15 +305,28 @@ _CHAPTER_DRAFTING_PROMPT = f"""你负责小说创作流程中的"逐章撰写"�
 (把当前 index 对应的那一项替换成新版本,其余章节原样保留,不要丢失)。
 
 {_JSON_ONLY}
-输出格式:
-{{"story_bible.chapters": [ ...完整章节数组,当前章节已填好 text/draft_summary/
-  word_count/status... ], "chapter_index": 当前章节的 index, "chapter_text": "本章正文,与
-  chapters 数组里的 text 保持一致,方便审校阶段直接读取"}}
+输出格式(数组必须包含全部章节,下面只展示当前撰写的这一条该长什么样,
+其余章节原样照抄输入里对应的条目):
+{{"story_bible.chapters": [{{"index": 1, "title": "...", "beat_summary": "...",
+    "draft_summary": "...", "text": "...", "word_count": 0, "status": "drafted"}}],
+  "chapter_index": 当前章节的 index,
+  "chapter_text": "本章正文,与 chapters 数组里的 text 保持一致,方便审校阶段直接读取"}}
 """
 
 
+CHAPTER_DRAFTING_OUTPUT_SCHEMA = StateSchema(
+    "chapter_drafting_output",
+    {"story_bible.chapters": [CHAPTER], "chapter_index": int, "chapter_text": str},
+)
+
+
 def build_chapter_drafting_stage(client: LLMClient) -> Stage:
-    agent = _make_agent(client, _CHAPTER_DRAFTING_PROMPT, toolsets=(RESEARCH_TOOLSET,))
+    agent = _make_agent(
+        client,
+        _CHAPTER_DRAFTING_PROMPT,
+        toolsets=(RESEARCH_TOOLSET,),
+        output_schema=CHAPTER_DRAFTING_OUTPUT_SCHEMA,
+    )
     return Stage(
         name="chapter_drafting",
         executor=agent.run,
@@ -274,6 +339,7 @@ def build_chapter_drafting_stage(client: LLMClient) -> Stage:
             "story_bible.chapters",
         ],
         writes=["story_bible.chapters"],
+        output_schema=CHAPTER_DRAFTING_OUTPUT_SCHEMA,
     )
 
 
@@ -295,7 +361,9 @@ foreshadowing 供你核对矛盾。
 
 
 def build_chapter_critic_stage(client: LLMClient) -> Stage:
-    agent = _make_agent(client, _CHAPTER_CRITIC_PROMPT, toolsets=(QA_TOOLSET,))
+    agent = _make_agent(
+        client, _CHAPTER_CRITIC_PROMPT, toolsets=(QA_TOOLSET,), output_schema=CRITIC_OUTPUT_SCHEMA
+    )
     return Stage(
         name="chapter_critic",
         executor=agent.run,
@@ -305,6 +373,7 @@ def build_chapter_critic_stage(client: LLMClient) -> Stage:
             "story_bible.timeline",
             "story_bible.foreshadowing",
         ],
+        output_schema=CRITIC_OUTPUT_SCHEMA,
     )
 
 
@@ -312,7 +381,12 @@ _CHAPTER_REVISION_PROMPT = _CHAPTER_DRAFTING_PROMPT  # 修订与撰写共用同�
 
 
 def build_chapter_revision_stage(client: LLMClient) -> Stage:
-    agent = _make_agent(client, _CHAPTER_REVISION_PROMPT, toolsets=(RESEARCH_TOOLSET,))
+    agent = _make_agent(
+        client,
+        _CHAPTER_REVISION_PROMPT,
+        toolsets=(RESEARCH_TOOLSET,),
+        output_schema=CHAPTER_DRAFTING_OUTPUT_SCHEMA,
+    )
     return Stage(
         name="chapter_revision",
         executor=agent.run,
@@ -325,6 +399,7 @@ def build_chapter_revision_stage(client: LLMClient) -> Stage:
             "story_bible.chapters",
         ],
         writes=["story_bible.chapters"],
+        output_schema=CHAPTER_DRAFTING_OUTPUT_SCHEMA,
     )
 
 
@@ -343,19 +418,33 @@ _MANUSCRIPT_POLISH_PROMPT = f"""你负责小说创作流程中的"全文统稿�
    状态一直悬空在 planted 却已过了计划回收的章节。
 
 {_JSON_ONLY}
-输出格式:
-{{"story_bible.chapters": [ ...完整章节数组,只改必要的地方... ],
-  "story_bible.foreshadowing": [ ...完整数组,状态已终态化... ]}}
+输出格式(两个数组都必须包含全部条目,下面只展示元素该长什么样,
+没有改动的条目原样照抄输入,只对确实要改的条目做最小必要修订):
+{{"story_bible.chapters": [{{"index": 1, "title": "...", "beat_summary": "...",
+    "draft_summary": "...", "text": "...", "word_count": 0, "status": "drafted"}}],
+  "story_bible.foreshadowing": [{{"id": "...", "planted_in_chapter": 1,
+    "description": "...", "payoff_chapter": 5, "status": "resolved"}}]}}
 """
 
 
+MANUSCRIPT_ASSEMBLY_POLISH_OUTPUT_SCHEMA = StateSchema(
+    "manuscript_assembly_polish_output",
+    {"story_bible.chapters": [CHAPTER], "story_bible.foreshadowing": [FORESHADOWING]},
+)
+
+
 def build_manuscript_assembly_polish_stage(client: LLMClient) -> Stage:
-    agent = _make_agent(client, _MANUSCRIPT_POLISH_PROMPT)
+    agent = _make_agent(
+        client,
+        _MANUSCRIPT_POLISH_PROMPT,
+        output_schema=MANUSCRIPT_ASSEMBLY_POLISH_OUTPUT_SCHEMA,
+    )
     return Stage(
         name="manuscript_assembly_polish",
         executor=agent.run,
         reads=["story_bible.chapters", "story_bible.foreshadowing", "story_bible.meta"],
         writes=["story_bible.chapters", "story_bible.foreshadowing"],
+        output_schema=MANUSCRIPT_ASSEMBLY_POLISH_OUTPUT_SCHEMA,
     )
 
 

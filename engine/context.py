@@ -73,22 +73,27 @@ class LifecycleHooks:
 
 @dataclass(frozen=True)
 class ResumePoint:
-    """从某个 Checkpoint 暂停处恢复运行所需的全部信息。
+    """从某个断点(人工 Checkpoint,或未预期的失败)恢复运行所需的全部信息。
 
     无 handler 的异步流程在 Checkpoint 处抛 CheckpointPause 后,宿主据其持久化
     快照;择机收集到人工输入后,构造一个 ResumePoint 塞进新的 RunContext,再次
-    调用 Workflow.run 即可从断点续跑,而非从头重跑。
+    调用 Workflow.run 即可从断点续跑,而非从头重跑。同样地,顶层节点抛出未捕获
+    异常时 Workflow.run 会包装成 WorkflowFailure(见 engine/workflow.py)冒泡给
+    宿主;宿主可据此构造一个 checkpoint_name=None 的 ResumePoint,下次运行时
+    跳过已成功的前序节点、只重跑失败的那个节点及之后的部分。
 
     Attributes:
-        checkpoint_name: 在哪个断点暂停(与 Checkpoint.name 对应,用于认领恢复输入)。
         node_index:      顶层节点游标——Workflow.run 从该索引处的节点重新开始执行,
                          从而跳过已完成的前序顶层节点(避免重复调用其 executor)。
-        inputs:          暂停时正流入该节点的 inputs;恢复时以它作为续跑的起始输入。
+        checkpoint_name: 在哪个断点暂停(与 Checkpoint.name 对应,用于认领恢复输入);
+                         为 None 表示这不是冲着某个 Checkpoint 来的(如失败续跑)——
+                         此时不会被任何 Checkpoint 认领,单纯定位 node_index/inputs。
+        inputs:          暂停/失败时正流入该节点的 inputs;恢复时以它作为续跑的起始输入。
         resume_input:    挂起期间从人工/外部收集到的输入,由对应 Checkpoint 认领。
     """
 
-    checkpoint_name: str
     node_index: int
+    checkpoint_name: str | None = None
     inputs: dict[str, Any] = field(default_factory=dict)
     resume_input: dict[str, Any] = field(default_factory=dict)
 

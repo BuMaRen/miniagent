@@ -36,6 +36,7 @@ class LLMClient(ABC):
         self,
         messages: list[Message],
         tools: list[ToolSchema] | None = None,
+        response_schema: dict[str, Any] | None = None,
         **params: Any,
     ) -> ChatResponse:
         """发起一次对话补全。
@@ -45,6 +46,11 @@ class LLMClient(ABC):
             tools:    可用工具的 ToolSchema 列表(由 ToolRegistry.schemas() 产出,
                       provider-neutral),各 Provider 实现内部自行转换成对应格式
                       (如 OpenAI 走 schema.to_openai());None 表示本次不提供工具。
+            response_schema: provider-neutral 的 JSON Schema(由
+                      state.schema.StateSchema.to_json_schema() 产出),非 None 时
+                      要求各 Provider 开启结构化输出模式,保证回复是符合该 schema
+                      的 JSON;各 Provider 内部自行转换成对应的请求形状(如 OpenAI
+                      的 response_format、Anthropic 的 output_config)。
             params:   温度、max_tokens 等 Provider 参数。
         """
 

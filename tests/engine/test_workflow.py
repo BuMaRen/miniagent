@@ -4,7 +4,7 @@ from engine.context import ResumePoint, RunContext
 from engine.primitives.checkpoint import Checkpoint, CheckpointPause
 from engine.primitives.loop import OnExceed
 from engine.stage import Stage
-from engine.workflow import NodeRegistry, Workflow
+from engine.workflow import NodeRegistry, Workflow, WorkflowFailure
 from state.backends.memory import InMemoryStateStore
 
 
@@ -19,6 +19,18 @@ class _AddNode:
 
     def run(self, ctx, inputs):
         return {"value": inputs["value"] + self.amount}
+
+
+class _BoomNode:
+    """执行到就抛异常的节点,用于模拟"未预期的失败"(网络抖动/Provider 报错等)。"""
+
+    def __init__(self, name, calls=None):
+        self.name = name
+        self.calls = calls if calls is not None else []
+
+    def run(self, ctx, inputs):
+        self.calls.append(inputs)
+        raise RuntimeError("boom")
 
 
 class WorkflowRunTests(unittest.TestCase):
@@ -56,6 +68,51 @@ class WorkflowRunTests(unittest.TestCase):
         wf.run(ctx, {"value": 0})
         events = [e["event"] for e in ctx.trace]
         self.assertEqual(events, ["workflow.start", "workflow.end"])
+
+    def test_unexpected_exception_bubbles_as_workflow_failure_with_position(self):
+        wf = Workflow(
+            name="wf",
+            nodes=[_AddNode("a", 1), _BoomNode("boom"), _AddNode("b", 2)],
+        )
+        with self.assertRaises(WorkflowFailure) as ctx_mgr:
+            wf.run(_ctx(), {"value": 0})
+        failure = ctx_mgr.exception
+        self.assertEqual(failure.node_name, "boom")
+        self.assertEqual(failure.node_index, 1)
+        self.assertEqual(failure.inputs, {"value": 1})
+        # 原始异常保留在 __cause__ 上,不丢失诊断信息
+        self.assertIsInstance(failure.__cause__, RuntimeError)
+
+    def test_workflow_failed_event_emitted_to_trace(self):
+        wf = Workflow(name="wf", nodes=[_BoomNode("boom")])
+        ctx = _ctx()
+        with self.assertRaises(WorkflowFailure):
+            wf.run(ctx, {"value": 0})
+        events = [e["event"] for e in ctx.trace]
+        self.assertEqual(events, ["workflow.start", "workflow.failed"])
+
+    def test_resume_after_failure_skips_completed_nodes_and_retries_failed_one(self):
+        calls = []
+        wf = Workflow(
+            name="wf",
+            nodes=[_AddNode("a", 1), _BoomNode("boom", calls=calls), _AddNode("b", 2)],
+        )
+        with self.assertRaises(WorkflowFailure) as ctx_mgr:
+            wf.run(_ctx(), {"value": 0})
+        failure = ctx_mgr.exception
+
+        # 宿主据 WorkflowFailure 持久化后,下次运行构造一个 checkpoint_name=None
+        # 的 ResumePoint 续跑:不该是 CheckpointPause 之外的"另一套机制",而是同一个
+        # ctx.resume 通道——只是没有对应的 Checkpoint 来认领它。
+        resume = ResumePoint(node_index=failure.node_index, inputs=failure.inputs)
+        replacement = Workflow(
+            name="wf",
+            nodes=[_AddNode("a", 1), _AddNode("fixed", 10), _AddNode("b", 2)],
+        )
+        result = replacement.run(_ctx(resume=resume), {"value": 999})
+        # "a" 没有被再次调用(它的产出被直接复用作 resume.inputs);
+        # 失败节点位置上的替代节点从 resume.inputs 开始正常执行。
+        self.assertEqual(result, {"value": 13})
 
 
 class NodeRegistryTests(unittest.TestCase):

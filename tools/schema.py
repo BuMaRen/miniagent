@@ -54,7 +54,7 @@ class ToolSchema:
         return {
             "name": self.name,
             "description": self.description,
-            "parameters": self.parameters,
+            "input_schema": self.parameters,
         }
 
 

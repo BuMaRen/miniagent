@@ -140,5 +140,72 @@ class ValidatePathTests(unittest.TestCase):
         schema.validate_path("blob.nested.path", "whatever")
 
 
+class ToJsonSchemaTests(unittest.TestCase):
+    def test_scalar_types(self):
+        schema = StateSchema("s", {"s": str, "i": int, "f": float, "b": bool})
+        self.assertEqual(
+            schema.to_json_schema(),
+            {
+                "type": "object",
+                "properties": {
+                    "s": {"type": "string"},
+                    "i": {"type": "integer"},
+                    "f": {"type": "number"},
+                    "b": {"type": "boolean"},
+                },
+                "required": ["s", "i", "f", "b"],
+                "additionalProperties": False,
+            },
+        )
+
+    def test_nested_object_and_list(self):
+        schema = StateSchema("s", {"chapters": [{"index": int, "title": str}]})
+        self.assertEqual(
+            schema.to_json_schema(),
+            {
+                "type": "object",
+                "properties": {
+                    "chapters": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"index": {"type": "integer"}, "title": {"type": "string"}},
+                            "required": ["index", "title"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                "required": ["chapters"],
+                "additionalProperties": False,
+            },
+        )
+
+    def test_optional_becomes_nullable_anyof(self):
+        schema = StateSchema("s", {"x": Optional(int)})
+        self.assertEqual(
+            schema.to_json_schema(),
+            {
+                "type": "object",
+                "properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "null"}]}},
+                "required": ["x"],
+                "additionalProperties": False,
+            },
+        )
+
+    def test_oneof_becomes_enum(self):
+        schema = StateSchema("s", {"role": OneOf("a", "b", "c")})
+        self.assertEqual(
+            schema.to_json_schema()["properties"]["role"], {"enum": ["a", "b", "c"]}
+        )
+
+    def test_any_becomes_unconstrained_schema(self):
+        schema = StateSchema("s", {"blob": ANY})
+        self.assertEqual(schema.to_json_schema()["properties"]["blob"], {})
+
+    def test_none_definition_yields_empty_schema(self):
+        schema = StateSchema("s", None)
+        self.assertEqual(schema.to_json_schema(), {})
+
+
 if __name__ == "__main__":
     unittest.main()

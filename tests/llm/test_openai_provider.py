@@ -1,7 +1,7 @@
 import unittest
 
 try:
-    from llm.providers.openai import _to_openai_message
+    from llm.providers.openai import _build_response_format, _to_openai_message
     _IMPORT_ERROR = None
 except ImportError as e:  # pragma: no cover - depends on optional dependency
     _IMPORT_ERROR = e
@@ -37,6 +37,17 @@ class ToOpenAIMessageTests(unittest.TestCase):
         self.assertEqual(result["tool_calls"][0]["id"], "c1")
         self.assertEqual(result["tool_calls"][0]["function"]["name"], "lookup")
         self.assertEqual(result["tool_calls"][0]["function"]["arguments"], '{"q": "x"}')
+
+
+@unittest.skipIf(_IMPORT_ERROR is not None, f"openai package not installed: {_IMPORT_ERROR}")
+class BuildResponseFormatTests(unittest.TestCase):
+    def test_wraps_schema_in_strict_json_schema_response_format(self):
+        schema = {"type": "object", "properties": {"x": {"type": "integer"}}}
+        result = _build_response_format(schema)
+        self.assertEqual(
+            result,
+            {"type": "json_schema", "json_schema": {"name": "output", "schema": schema, "strict": True}},
+        )
 
 
 if __name__ == "__main__":

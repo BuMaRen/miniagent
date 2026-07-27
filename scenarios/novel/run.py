@@ -14,14 +14,16 @@ offline_demo.py 用脚本化回复走一遍完整流水线,验证接线是否正
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from engine.context import CheckpointRequest, LifecycleHooks, RunContext
+from engine.context import CheckpointRequest, LifecycleHooks, ResumePoint, RunContext
 from engine.primitives.checkpoint import CheckpointPause
+from engine.workflow import WorkflowFailure
 from llm.client import LLMClient
 from state.backends.json_file import JsonFileStateStore
 
@@ -32,6 +34,41 @@ from scenarios.novel.workflow import build_workflow
 DEFAULT_BRIEF_PATH = Path(__file__).with_name("brief.yaml")
 DEFAULT_OUTPUT_DIR = Path(__file__).with_name("output")
 DEFAULT_STATE_FILE = "story_bible_state.json"
+RESUME_SUFFIX = ".resume.json"
+
+
+def _resume_path(state_path: Path) -> Path:
+    return state_path.with_name(state_path.name + RESUME_SUFFIX)
+
+
+def _save_resume_point(state_path: Path, node_index: int, inputs: dict[str, Any], node_name: str) -> None:
+    """把"从哪个顶层节点续跑"记到 state 文件旁的一份 sidecar JSON 里。
+
+    state_store 本身每次 patch/append 都已落盘(见 JsonFileStateStore),但那只是
+    各 Stage 通过 writes 显式写回的状态切片;顶层节点游标与直接透传的 outputs
+    (§7.2 通道①,不落 State)不在其中,必须单独持久化,下次启动才能定位到
+    "重跑这个节点、之前的都不用再跑一遍"。
+    """
+    resume_path = _resume_path(state_path)
+    resume_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = resume_path.with_name(resume_path.name + ".tmp")
+    payload = {"node_index": node_index, "node_name": node_name, "inputs": inputs}
+    with tmp_path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    tmp_path.replace(resume_path)
+
+
+def _load_resume_point(state_path: Path) -> ResumePoint | None:
+    resume_path = _resume_path(state_path)
+    if not resume_path.exists():
+        return None
+    with resume_path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+    return ResumePoint(node_index=payload["node_index"], inputs=payload["inputs"])
+
+
+def _clear_resume_point(state_path: Path) -> None:
+    _resume_path(state_path).unlink(missing_ok=True)
 
 
 def build_llm_client() -> LLMClient:
@@ -42,6 +79,7 @@ def build_llm_client() -> LLMClient:
         return AnthropicClient(
             api_key=os.environ["ANTHROPIC_API_KEY"],
             model=os.environ.get("NOVEL_MODEL", "claude-sonnet-4-5"),
+            max_tokens=16384,
         )
     if os.environ.get("OPENAI_API_KEY"):
         from llm.providers.openai import OpenAIClient
@@ -106,6 +144,10 @@ def main() -> None:
     if not state_store.snapshot():
         state_store.load(empty_state())
 
+    resume = _load_resume_point(state_path)
+    if resume is not None:
+        print(f"检测到上次未完成的运行,从顶层节点游标 {resume.node_index} 续跑,跳过已成功的前序节点。")
+
     ctx = RunContext(
         state=state_store,
         checkpoint_handler=make_checkpoint_handler(args.auto_approve),
@@ -113,14 +155,26 @@ def main() -> None:
             before_stage=lambda name, _inputs: print(f"[stage:start] {name}"),
             after_stage=lambda name, _outputs: print(f"[stage:done]  {name}"),
         ),
+        resume=resume,
     )
 
     try:
         outputs = workflow.run(ctx, brief)
     except CheckpointPause as pause:
+        _save_resume_point(state_path, pause.node_index, pause.inputs, pause.checkpoint_name)
         print(f"流程在断点 {pause.checkpoint_name!r} 处暂停,状态已保存到 {state_path},可稍后续跑。")
         return
+    except WorkflowFailure as failure:
+        _save_resume_point(state_path, failure.node_index, failure.inputs, failure.node_name)
+        print(
+            f"流程在节点 {failure.node_name!r}(顶层游标 {failure.node_index})执行失败:"
+            f"{failure.__cause__!r}\n"
+            f"状态已保存到 {state_path},修复问题后重新运行本命令即可从该节点续跑,"
+            f"无需重跑之前已成功的节点。"
+        )
+        raise
 
+    _clear_resume_point(state_path)
     written = land_output(state_store.snapshot(), args.output_dir)
     print("\n已落地产物:")
     for label, path in written.items():

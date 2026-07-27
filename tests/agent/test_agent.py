@@ -6,6 +6,7 @@ from agent.memory import ConversationMemory
 from agent.toolset import ToolSet
 from llm.client import ChatResponse, LLMClient
 from llm.message import Message, ToolCall
+from state.schema import StateSchema
 from tools.registry import ToolRegistry
 
 
@@ -57,6 +58,47 @@ class AgentOutputParsingTests(unittest.TestCase):
         outputs = agent.run(ctx=None, inputs={})
         # a JSON array isn't a dict, so it falls back to the {"output": ...} wrapper
         self.assertEqual(outputs, {"output": "[1, 2, 3]"})
+
+
+class AgentOutputSchemaTests(unittest.TestCase):
+    def test_response_schema_is_none_when_output_schema_unset(self):
+        client = ScriptedLLMClient([_final('{"result": "ok"}')])
+        agent = Agent(client=client, memory=ConversationMemory(), registry=ToolRegistry())
+        agent.run(ctx=None, inputs={})
+        self.assertIsNone(client.calls[0]["params"]["response_schema"])
+
+    def test_response_schema_is_converted_from_output_schema(self):
+        client = ScriptedLLMClient([_final('{"answer": 42}')])
+        output_schema = StateSchema("out", {"answer": int})
+        agent = Agent(
+            client=client,
+            memory=ConversationMemory(),
+            registry=ToolRegistry(),
+            output_schema=output_schema,
+        )
+        agent.run(ctx=None, inputs={})
+        self.assertEqual(
+            client.calls[0]["params"]["response_schema"], output_schema.to_json_schema()
+        )
+
+    def test_response_schema_still_passed_alongside_tools_during_tool_loop(self):
+        output_schema = StateSchema("out", {"answer": int})
+        client = ScriptedLLMClient(
+            [_tool_call_response("c1", "double", {"x": 21}), _final('{"answer": 42}')]
+        )
+        agent = Agent(
+            client=client,
+            memory=ConversationMemory(),
+            registry=ToolRegistry(),
+            output_schema=output_schema,
+        )
+        agent.load_toolset(ToolSet.from_funcs("math", [double]))
+
+        agent.run(ctx=None, inputs={})
+
+        for call in client.calls:
+            self.assertIsNotNone(call["tools"])
+            self.assertEqual(call["params"]["response_schema"], output_schema.to_json_schema())
 
 
 class AgentToolLoopTests(unittest.TestCase):

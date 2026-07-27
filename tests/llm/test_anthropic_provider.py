@@ -1,7 +1,7 @@
 import unittest
 
 try:
-    from llm.providers.anthropic import _extract_system, _to_anthropic_messages
+    from llm.providers.anthropic import _build_output_config, _extract_system, _to_anthropic_messages
     _IMPORT_ERROR = None
 except ImportError as e:  # pragma: no cover - depends on optional dependency
     _IMPORT_ERROR = e
@@ -76,6 +76,17 @@ class ToAnthropicMessagesTests(unittest.TestCase):
     def test_plain_assistant_message_without_tool_calls(self):
         result = _to_anthropic_messages([Message(role="assistant", content="hi")])
         self.assertEqual(result, [{"role": "assistant", "content": "hi"}])
+
+
+@unittest.skipIf(_IMPORT_ERROR is not None, f"anthropic package not installed: {_IMPORT_ERROR}")
+class BuildOutputConfigTests(unittest.TestCase):
+    def test_wraps_schema_in_output_config_format(self):
+        schema = {"type": "object", "properties": {"x": {"type": "integer"}}}
+        result = _build_output_config(schema)
+        self.assertEqual(
+            result,
+            {"format": {"type": "json_schema", "schema": schema}},
+        )
 
 
 if __name__ == "__main__":

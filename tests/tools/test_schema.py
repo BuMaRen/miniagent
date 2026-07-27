@@ -71,7 +71,7 @@ class ToolSchemaConversionTests(unittest.TestCase):
     def test_to_anthropic_shape(self):
         schema = ToolSchema(name="t", description="desc", parameters={"type": "object"})
         result = schema.to_anthropic()
-        self.assertEqual(result, {"name": "t", "description": "desc", "parameters": {"type": "object"}})
+        self.assertEqual(result, {"name": "t", "description": "desc", "input_schema": {"type": "object"}})
 
 
 if __name__ == "__main__":

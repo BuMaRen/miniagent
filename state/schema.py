@@ -137,6 +137,36 @@ def _validate(desc: Any, value: Any, path: str) -> None:
     raise SchemaError(f"{where}: 无法识别的 schema 描述符 {desc!r}")
 
 
+_JSON_TYPE_MAP: dict[type, str] = {str: "string", int: "integer", float: "number", bool: "boolean"}
+
+
+def _to_json_schema(desc: Any) -> dict[str, Any]:
+    """把描述符递归转成 JSON Schema,供 LLM Provider 的结构化输出模式使用。
+
+    刻意生成两家 Provider strict 模式都能接受的形状:对象一律
+    additionalProperties=false 且所有字段进 required(可选性改用
+    Optional -> nullable 表达,而不是从 required 里剔除)。
+    """
+    if desc is ANY or isinstance(desc, _AnyType) or desc is None:
+        return {}
+    if isinstance(desc, Optional):
+        return {"anyOf": [_to_json_schema(desc.inner), {"type": "null"}]}
+    if isinstance(desc, OneOf):
+        return {"enum": list(desc.choices)}
+    if isinstance(desc, type) and desc in _JSON_TYPE_MAP:
+        return {"type": _JSON_TYPE_MAP[desc]}
+    if isinstance(desc, list):
+        return {"type": "array", "items": _to_json_schema(desc[0])}
+    if isinstance(desc, dict):
+        return {
+            "type": "object",
+            "properties": {k: _to_json_schema(v) for k, v in desc.items()},
+            "required": list(desc.keys()),
+            "additionalProperties": False,
+        }
+    raise SchemaError(f"无法识别的 schema 描述符 {desc!r}")
+
+
 def _empty(desc: Any) -> Any:
     """按描述符生成一个"类型正确的零值",作为空初始状态的骨架。"""
     if isinstance(desc, Optional) or isinstance(desc, OneOf):
@@ -175,6 +205,14 @@ class StateSchema:
         result = _empty(self.definition)
         # 顶层约定为对象;若场景把 definition 写成了非对象,兜底成 {} 以符合返回类型。
         return result if isinstance(result, dict) else {}
+
+    def to_json_schema(self) -> dict[str, Any]:
+        """转成 JSON Schema,供 LLM Provider 的结构化输出模式(OpenAI response_format /
+        Anthropic output_config)使用。definition 为 None 时返回空 schema(不作约束)。
+        """
+        if self.definition is None:
+            return {}
+        return _to_json_schema(self.definition)
 
     def validate(self, data: dict[str, Any]) -> None:
         """校验一份数据是否符合 schema;不符合抛出带清晰路径的 SchemaError。"""

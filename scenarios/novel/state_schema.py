@@ -17,7 +17,10 @@ from __future__ import annotations
 
 from state.schema import OneOf, Optional, StateSchema
 
-_CHARACTER = {
+# 以下几个子结构对象刻意不加下划线前缀:除了组装 STORY_BIBLE_DEFINITION,
+# scenarios/novel/stages.py 还复用它们拼各 Stage 的 output_schema(见其模块
+# docstring),因此是本模块对外的公共契约,而不是纯内部实现细节。
+CHARACTER = {
     "id": str,
     "name": str,
     "role": OneOf("protagonist", "antagonist", "supporting"),
@@ -29,20 +32,20 @@ _CHARACTER = {
     "status_log": [{"after_chapter": int, "state": str}],
 }
 
-_WORLD_ENTRY = {
+WORLD_ENTRY = {
     "id": str,
     "name": str,
     "description": str,
     "established_in_chapter": int,
 }
 
-_TIMELINE_EVENT = {
+TIMELINE_EVENT = {
     "chapter": int,
     "event": str,
     "involved_characters": [str],
 }
 
-_FORESHADOWING = {
+FORESHADOWING = {
     "id": str,
     "planted_in_chapter": int,
     "description": str,
@@ -50,7 +53,7 @@ _FORESHADOWING = {
     "status": OneOf("planted", "resolved", "dropped"),
 }
 
-_CHAPTER = {
+CHAPTER = {
     "index": int,
     "title": str,
     "beat_summary": str,
@@ -73,11 +76,11 @@ STORY_BIBLE_DEFINITION = {
             "pov": str,
             "tone": str,
         },
-        "characters": [_CHARACTER],
-        "world": [_WORLD_ENTRY],
-        "timeline": [_TIMELINE_EVENT],
-        "foreshadowing": [_FORESHADOWING],
-        "chapters": [_CHAPTER],
+        "characters": [CHARACTER],
+        "world": [WORLD_ENTRY],
+        "timeline": [TIMELINE_EVENT],
+        "foreshadowing": [FORESHADOWING],
+        "chapters": [CHAPTER],
     },
     # ForEach 的游标(index/item)天然也落在 State 里、与 "story_bible" 平级
     # (见 engine/primitives/foreach.py 的默认路径 "_foreach.<name>.index/item")。

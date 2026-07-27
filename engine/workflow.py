@@ -20,6 +20,27 @@ from engine.primitives.loop import Loop, OnExceed
 from engine.primitives.sequence import Sequence
 
 
+class WorkflowFailure(Exception):
+    """顶层节点抛出未捕获异常时的封装,携带续跑所需的游标与 inputs。
+
+    与 CheckpointPause 同构,区别只在于这是"非预期的失败"而非"预期的暂停"。
+    宿主捕获后通常会持久化 (node_index, inputs),下次运行时构造一个
+    ``ResumePoint(node_index=..., inputs=..., checkpoint_name=None)`` 并塞进新的
+    RunContext 再次调用 Workflow.run——即可跳过已成功的前序顶层节点,只从失败
+    的这个节点起重跑,而不必从头重跑整个 workflow。
+
+    node_index / inputs 在构造时即已知(由 Workflow.run 在捕获处直接算出),
+    不像 CheckpointPause 那样需要外层回填。原始异常挂在 __cause__ 上(见
+    ``raise failure from err``),诊断信息不丢失。
+    """
+
+    def __init__(self, node_name: str, node_index: int, inputs: dict[str, Any]) -> None:
+        super().__init__(f"workflow failed at node {node_name!r} (index {node_index})")
+        self.node_name = node_name
+        self.node_index = node_index
+        self.inputs = inputs
+
+
 @dataclass
 class Workflow:
     """一个可执行的工作流。
@@ -47,14 +68,18 @@ class Workflow:
         #   · state_schema 初始化/校验:ctx.state 由调用方构造并注入(恢复场景下
         #     可能已从快照 load 过),此处不擅自清空重建;待 StateSchema.validate
         #     落地后可在此加一道可选校验。(本次按要求略过)
-        #   · Checkpoint 续跑:若 ctx.resume 非 None,说明这是一次恢复运行——从
-        #     resume.node_index 处的顶层节点开始,以 resume.inputs 作为起始输入,
-        #     跳过已完成的前序顶层节点(避免重复调用它们的 executor)。断点处的
-        #     人工输入由对应 Checkpoint 从 ctx.resume 认领。
-        #   · 局限:游标只到"顶层节点"粒度。若 Checkpoint 嵌套在 Sequence/Loop/
-        #     ForEach 内部,node_index 指向的是那个容器,恢复会重跑该容器内断点
-        #     之前的兄弟节点(断点本身仍能按名认领输入、不会二次暂停)。真正的
-        #     嵌套续跑需把游标贯穿到各容器原语,属后续工作。
+        #   · 续跑(Checkpoint 暂停 或 失败重试):若 ctx.resume 非 None,说明这是
+        #     一次恢复运行——从 resume.node_index 处的顶层节点开始,以 resume.inputs
+        #     作为起始输入,跳过已完成的前序顶层节点(避免重复调用它们的
+        #     executor)。若 resume.checkpoint_name 非 None,断点处的人工输入由对应
+        #     Checkpoint 从 ctx.resume 认领;为 None 则单纯是"从这个节点重跑"(如
+        #     上次在此节点抛出 WorkflowFailure 后由宿主构造的续跑点),节点本身按
+        #     正常逻辑重新执行,不做任何认领。
+        #   · 局限:游标只到"顶层节点"粒度。若 Checkpoint/失败点嵌套在
+        #     Sequence/Loop/ForEach 内部,node_index 指向的是那个容器,恢复会重跑
+        #     该容器内断点/失败点之前的兄弟节点(断点本身仍能按名认领输入、不会
+        #     二次暂停;失败点则整个容器重新执行)。真正的嵌套续跑需把游标贯穿到
+        #     各容器原语,属后续工作。
         start = 0
         outputs = inputs
         if ctx.resume is not None:
@@ -67,8 +92,9 @@ class Workflow:
         )
 
         for i in range(start, len(self.nodes)):
+            node = self.nodes[i]
             try:
-                outputs = self.nodes[i].run(ctx, outputs)
+                outputs = node.run(ctx, outputs)
             except CheckpointPause as pause:
                 # Checkpoint 不知道自己在顶层序列里的位置;在此回填游标与当前流入
                 # inputs,宿主据此(连同 state 快照)构造 ResumePoint 以便日后续跑。
@@ -83,6 +109,24 @@ class Workflow:
                     },
                 )
                 raise
+            except Exception as err:
+                # 未预期的失败(网络抖动、Provider 报错、契约解析失败……):与
+                # CheckpointPause 同构地把"游标 + 流入的 inputs"封进 WorkflowFailure
+                # 冒泡给宿主。宿主据此持久化后,下次运行可从 node_index 处(即失败
+                # 的这个节点本身,而非其后)重新开始,从而复用前面已成功节点的产出,
+                # 不必从头重跑整个 workflow。原始异常通过 `raise ... from err` 保留
+                # 在 __cause__ 上,不丢失诊断信息。
+                failure = WorkflowFailure(node_name=node.name, node_index=i, inputs=deepcopy(outputs))
+                ctx.emit(
+                    "workflow.failed",
+                    {
+                        "workflow": self.name,
+                        "node": node.name,
+                        "node_index": i,
+                        "error": repr(err),
+                    },
+                )
+                raise failure from err
 
         ctx.emit("workflow.end", {"workflow": self.name, "outputs": outputs})
         return outputs

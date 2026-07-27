@@ -15,6 +15,28 @@ from engine.stage import Node
 from engine.context import CheckpointRequest, RunContext
 
 
+class CriticContractError(RuntimeError):
+    """critic 节点输出不满足 {} 契约时抛出。
+
+    比裸的 KeyError 更有诊断价值:点名是哪个 crtic、约定要求什么字段、
+    实际收到了什么——这通常意味着上游 Agent 的最终回复没能被解析成预期
+    JSON(见 agent/agent.py 的 _parse_output 兜底行为)。
+    """
+
+def _read_passed(verdict: dict[str, Any], critic_name: str) -> bool:
+    if CRITIC_PASSED_KEY not in verdict:
+        raise CriticContractError(
+            f"critic {critic_name!r} 的输出不满足契约:缺少 {CRITIC_PASSED_KEY} 字段,实际输出: {verdict}"
+        )
+    return bool(verdict[CRITIC_PASSED_KEY])
+
+def _read_feedback(verdict: dict[str, Any], critic_name: str) -> str:
+    if CRITIC_FEEDBACK_KEY not in verdict:
+        raise CriticContractError(
+            f"critic {critic_name!r} 的输出不满足契约:缺少 {CRITIC_FEEDBACK_KEY} 字段,实际输出: {verdict}"
+        )
+    return str(verdict[CRITIC_FEEDBACK_KEY])
+
 class OnExceed(str, Enum):
     """达到 max_iterations 仍未通过时的策略。"""
 
@@ -62,18 +84,19 @@ class Loop:
         #        RAISE                  -> raise LoopExceededError
         current = self.producer.run(ctx, inputs)
         verdict = self.critic.run(ctx, current)
-        if verdict[CRITIC_PASSED_KEY]:
+        if _read_passed(verdict, self.critic.name):
             return current
         for i in range(self.max_iterations):
             if ctx.hooks and ctx.hooks.before_loop_iteration:
                 ctx.hooks.before_loop_iteration(self.name, i)
             current = self.reviser.run(
-                ctx, {**current, "feedback": verdict[CRITIC_FEEDBACK_KEY]}
+                ctx, {**current, "feedback": _read_feedback(verdict, self.critic.name)}
             )
             verdict = self.critic.run(ctx, current)
+            passed = _read_passed(verdict, self.critic.name)
             if ctx.hooks and ctx.hooks.after_loop_iteration:
-                ctx.hooks.after_loop_iteration(self.name, i, verdict[CRITIC_PASSED_KEY])
-            if verdict[CRITIC_PASSED_KEY]:
+                ctx.hooks.after_loop_iteration(self.name, i, passed)
+            if passed:
                 return current
         # 循环结束仍未通过 -> 按 on_exceed 处理
         if self.on_exceed == OnExceed.ACCEPT_LAST:

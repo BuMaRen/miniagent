@@ -41,6 +41,7 @@ class AnthropicClient(LLMClient):
         self,
         messages: list[Message],
         tools: list[ToolSchema] | None = None,
+        response_schema: dict[str, Any] | None = None,
         **params: Any,
     ) -> ChatResponse:
         system = _extract_system(messages)
@@ -56,6 +57,8 @@ class AnthropicClient(LLMClient):
             payload["system"] = system
         if tools:
             payload["tools"] = [t.to_anthropic() for t in tools]
+        if response_schema is not None:
+            payload["output_config"] = _build_output_config(response_schema)
 
         response = self._client.messages.create(**payload)
 
@@ -78,6 +81,11 @@ class AnthropicClient(LLMClient):
         usage = response.usage.model_dump() if response.usage else {}
 
         return ChatResponse(message=message, tool_calls=tool_calls, usage=usage)
+
+
+def _build_output_config(schema: dict[str, Any]) -> dict[str, Any]:
+    """把 provider-neutral 的 JSON Schema 包成 Anthropic 的 output_config 结构。"""
+    return {"format": {"type": "json_schema", "schema": schema}}
 
 
 def _extract_system(messages: list[Message]) -> str | None:

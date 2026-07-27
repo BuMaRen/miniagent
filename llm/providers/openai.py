@@ -41,6 +41,7 @@ class OpenAIClient(LLMClient):
         self,
         messages: list[Message],
         tools: list[ToolSchema] | None = None,
+        response_schema: dict[str, Any] | None = None,
         **params: Any,
     ) -> ChatResponse:
         payload: dict[str, Any] = {
@@ -51,6 +52,8 @@ class OpenAIClient(LLMClient):
         }
         if tools:
             payload["tools"] = [t.to_openai() for t in tools]
+        if response_schema is not None:
+            payload["response_format"] = _build_response_format(response_schema)
 
         completion = self._client.chat.completions.create(**payload)
         choice = completion.choices[0].message
@@ -73,6 +76,14 @@ class OpenAIClient(LLMClient):
         usage = completion.usage.model_dump() if completion.usage else {}
 
         return ChatResponse(message=message, tool_calls=tool_calls, usage=usage)
+
+def _build_response_format(schema: dict[str, Any]) -> dict[str, Any]:
+    """把 provider-neutral 的 JSON Schema 包成 OpenAI 的 response_format 结构。"""
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "output", "schema": schema, "strict": True},
+    }
+
 
 def _to_openai_message(message: Message) -> dict[str, Any]:
     """把框架的 Message 转成 OpenAI 的 messages 结构。"""

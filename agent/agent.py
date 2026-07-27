@@ -8,7 +8,9 @@ Agent 把 LLM、工具、工具集、记忆组装在一起,内部驱动一个 ag
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
+import re
 from typing import Any
 
 from agent.toolset import ToolSet
@@ -17,6 +19,8 @@ from llm.client import LLMClient
 from llm.message import Message
 from tools.registry import ToolRegistry, default_registry
 from tools.executor import ToolExecutor
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -35,6 +39,11 @@ class Agent:
                       根本查不到。
         toolsets:       已加载的工具集列表。
         max_steps:    单次运行内 agentic loop 的最大步数,防止失控。
+        output_schema: 最终输出的契约(通常与挂载本 Agent 的 Stage.output_schema
+                      是同一个 state.schema.StateSchema 实例,由调用方在构造时
+                      对齐两处)。非 None 时,每轮 client.chat() 都会带上按其
+                      to_json_schema() 转换出的 response_schema,开启 Provider
+                      的结构化输出模式,而不是仅靠 prompt 里的 JSON 格式说明。
     """
 
     client: LLMClient
@@ -43,6 +52,7 @@ class Agent:
     executor: ToolExecutor | None = None
     toolsets: list[ToolSet] = field(default_factory=list)
     max_steps: int = 12
+    output_schema: Any | None = None
 
     def __post_init__(self) -> None:
         # 防止用户使用了自定义 registry 却没传 executor,导致 executor 仍然使用默认 registry
@@ -84,20 +94,43 @@ class Agent:
         """
         self.memory.append(Message(role="user", content=json.dumps(inputs, ensure_ascii=False)))
 
+        response_schema = (
+            self.output_schema.to_json_schema() if self.output_schema is not None else None
+        )
+
         resp = None
         for _ in range(self.max_steps):
             if self.memory.needs_compaction():
                 self._compact()
 
-            resp = self.client.chat(self.memory.render(), tools=self.registry.schemas() or None)
+            resp = self.client.chat(
+                self.memory.render(),
+                tools=self.registry.schemas() or None,
+                response_schema=response_schema,
+            )
             self.memory.append(resp.message)
 
             if not resp.tool_calls:
                 break
             for result in self.executor.execute_all(resp.tool_calls):
                 self.memory.append(result)
+        else:
+            # for 循环正常耗尽(没有 break),说明到 max_steps 时模型仍在发起
+            # tool_calls、从未给出不带工具调用的最终回复——下面 _parse_output
+            # 拿到的 resp.message.content 大概率是空的,先在这里把原因记下来,
+            # 否则只会在下游看到一个不知所云的 "未声明的字段 'output'"。
+            if resp is not None and resp.tool_calls:
+                logger.warning(
+                    "Agent.run: 达到 max_steps=%d 时仍有待处理的 tool_calls(%s),"
+                    "模型没有给出不带工具调用的最终回复,最终 content=%r",
+                    self.max_steps,
+                    [tc.name for tc in resp.tool_calls],
+                    resp.message.content,
+                )
 
-        return _parse_output(resp.message.content if resp else None)
+        raw_content = resp.message.content if resp else None
+        logger.debug("Agent.run: 最终回复原始 content=%r", raw_content)
+        return _parse_output(raw_content)
 
     def _compact(self) -> None:
         """触发一次记忆压缩:让 LLM 把较早消息总结成一段摘要,回写进 Memory。
@@ -133,14 +166,36 @@ def _parse_output(content: str | None) -> dict[str, Any]:
     回复),退化为 {"output": content} 包装成 dict,而不是让整个 run 失败。
     """
     if content:
+        stripped = _strip_markdown_fence(content)
         try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "Agent.run: 最终回复不是合法 JSON(%s),原始内容:%r", exc, content
+            )
             parsed = None
         if isinstance(parsed, dict):
             return parsed
+        if parsed is not None:
+            logger.warning(
+                "Agent.run: 最终回复是合法 JSON 但不是对象(是 %s),原始内容:%r",
+                type(parsed).__name__,
+                content,
+            )
+    else:
+        logger.warning("Agent.run: 最终回复内容为空,content=%r", content)
     return {"output": content}
 
+_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL | re.IGNORECASE)
+
+def _strip_markdown_fence(content: str) -> str:
+    """去掉模型偶尔加上的 ```json ... ``` 包裹,不改动其余内容。
+    
+    提示词已明确要求"不要用 markdown 代码块包裹"(见_JSON_ONLY),但模型
+    仍可能不遵守;这里只做这一种常见偏差的兼容,而非通用的"提取 JSON"启发式。
+    """
+    match = _FENCE_RE.match(content.strip())
+    return match.group(1).strip() if match else content
 
 from typing import TYPE_CHECKING  # noqa: E402
 
