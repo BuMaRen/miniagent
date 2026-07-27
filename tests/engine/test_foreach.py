@@ -1,6 +1,7 @@
 import unittest
 
 from engine.context import LifecycleHooks, RunContext
+from engine.primitives.checkpoint import CheckpointPause
 from engine.primitives.foreach import ForEach
 from state.backends.memory import InMemoryStateStore
 
@@ -90,6 +91,50 @@ class ForEachTests(unittest.TestCase):
         fe.run(ctx, {})
         self.assertEqual(calls[0], ("before", "fe", 0))
         self.assertEqual(calls[-1], ("after", "fe", 2, True))
+
+    def test_checkpoint_pause_from_body_advances_index_before_bubbling(self):
+        # 回归测试:body 内部放了一个"每轮结束后暂停"的 Checkpoint(比如场景方
+        # 想让人工在每个 item 处理完之后决定是否继续)。之前的实现里,advance
+        # 只在 body.run() 正常返回后执行——CheckpointPause 从 body 内部抛出时会
+        # 跳过 advance,导致恢复后把刚处理完的这一项重新跑一遍(novel 场景里
+        # 表现为:每次在 chapter_pause 处暂停后,续跑又从同一章开始)。
+        class _PausingBody:
+            name = "body"
+
+            def __init__(self, item_path, state):
+                self.item_path = item_path
+                self.state = state
+                self.seen_items = []
+
+            def run(self, ctx, inputs):
+                self.seen_items.append(ctx.state.get(self.item_path))
+                raise CheckpointPause("per_item_pause")
+
+        body = _PausingBody("_foreach.fe.item", self.state)
+        fe = ForEach(name="fe", items_path="chapters", body=body)
+
+        with self.assertRaises(CheckpointPause):
+            fe.run(self.ctx, {})
+        self.assertEqual(body.seen_items, ["one"])
+        self.assertEqual(self.state.get("_foreach.fe.index"), 1)
+
+        # 续跑:应该处理下一项("two"),而不是重新处理 "one"。
+        with self.assertRaises(CheckpointPause):
+            fe.run(self.ctx, {})
+        self.assertEqual(body.seen_items, ["one", "two"])
+        self.assertEqual(self.state.get("_foreach.fe.index"), 2)
+
+    def test_other_exceptions_from_body_do_not_advance_index(self):
+        class _FailingBody:
+            name = "body"
+
+            def run(self, ctx, inputs):
+                raise RuntimeError("boom")
+
+        fe = ForEach(name="fe", items_path="chapters", body=_FailingBody())
+        with self.assertRaises(RuntimeError):
+            fe.run(self.ctx, {})
+        self.assertEqual(self.state.get("_foreach.fe.index"), 0)
 
     def test_body_does_not_leak_mutations_across_rounds(self):
         seen_inputs = []

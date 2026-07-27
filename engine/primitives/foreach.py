@@ -30,6 +30,7 @@ from typing import Any
 
 from engine.stage import Node, StatePath
 from engine.context import RunContext
+from engine.primitives.checkpoint import CheckpointPause
 
 
 @dataclass
@@ -76,7 +77,16 @@ class ForEach:
 
             # body 各轮共享 ctx.state(连贯性由此而来);inputs 每轮给一份浅拷贝,
             # 避免 Stage.run 对 inputs 的原地改写跨轮泄漏。
-            self.body.run(ctx, dict(inputs))
+            try:
+                self.body.run(ctx, dict(inputs))
+            except CheckpointPause:
+                # body 内部可能自己挂了一个"每轮结束后暂停"的 Checkpoint(比如
+                # 场景方在 body 末尾放置的人工确认点)——这轮该做的事已经做完了,
+                # 只是流程主动选择在此暂停,所以要先 advance 再把暂停继续往上抛,
+                # 否则恢复时会把刚跑完的这一项重新跑一遍。真正跑失败(其他
+                # Exception)则不 advance,交由外层重试同一项。
+                ctx.state.patch(index_path, i + 1)
+                raise
 
             if ctx.hooks and ctx.hooks.after_loop_iteration:
                 ctx.hooks.after_loop_iteration(self.name, i, True)
