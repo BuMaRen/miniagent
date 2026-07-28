@@ -419,6 +419,35 @@ def build_chapter_revision_stage(client: LLMClient) -> Stage:
 
 
 # ---------------------------------------------------------------------------
+# 3.8.1 章节定稿 —— chapter_review_loop 的 critic 通过后,把该章 status 从
+# "drafted" 推进到 "reviewed"。纯函数 executor,不需要 LLM:producer/reviser
+# 只负责"写出 drafted 版本",到底有没有过审是 Loop/critic 的判断,不该也不
+# 需要让写作 Agent 自己声明"reviewed"——那等于让它给自己的作业判分。
+# ---------------------------------------------------------------------------
+
+
+def chapter_finalize_executor(ctx: RunContext, inputs: dict[str, Any]) -> dict[str, Any]:
+    """把当前 ForEach 迭代对应的章节 status 改成 "reviewed",其余章节原样保留。"""
+    state = inputs.get("state", {})
+    current_index = (state.get(CHAPTER_LOOP_ITEM_PATH) or {}).get("index")
+    chapters = state.get("story_bible.chapters") or []
+    updated_chapters = [
+        {**chapter, "status": "reviewed"} if chapter.get("index") == current_index else chapter
+        for chapter in chapters
+    ]
+    return {"story_bible.chapters": updated_chapters}
+
+
+def build_chapter_finalize_stage() -> Stage:
+    return Stage(
+        name="chapter_finalize",
+        executor=chapter_finalize_executor,
+        reads=[CHAPTER_LOOP_ITEM_PATH, "story_bible.chapters"],
+        writes=["story_bible.chapters"],
+    )
+
+
+# ---------------------------------------------------------------------------
 # 3.9 全文统稿与润色
 # ---------------------------------------------------------------------------
 
@@ -546,6 +575,7 @@ def build_stage_registry(client_factory: ClientFactory):
     registry.register(build_chapter_drafting_stage(client_factory("chapter_drafting")))
     registry.register(build_chapter_critic_stage(client_factory("chapter_critic")))
     registry.register(build_chapter_revision_stage(client_factory("chapter_revision")))
+    registry.register(build_chapter_finalize_stage())
     registry.register(
         build_manuscript_assembly_polish_stage(client_factory("manuscript_assembly_polish"))
     )

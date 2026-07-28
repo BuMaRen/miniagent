@@ -34,7 +34,7 @@ class OfflineDemoEndToEndTests(unittest.TestCase):
             chapters = bible["story_bible"]["chapters"]
             self.assertEqual(len(chapters), 1)
             self.assertEqual(chapters[0]["title"], "初到西汉")
-            self.assertEqual(chapters[0]["status"], "drafted")
+            self.assertEqual(chapters[0]["status"], "reviewed")
             self.assertEqual(chapters[0]["text"], CHAPTER_1_TEXT)
             self.assertGreater(chapters[0]["word_count"], 1000)
 

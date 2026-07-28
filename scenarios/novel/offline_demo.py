@@ -274,7 +274,7 @@ def build_scripted_client_factory():
                         ),
                         "text": CHAPTER_1_TEXT,
                         "word_count": 0,
-                        "status": "drafted",
+                        "status": "reviewed",
                     }
                 ],
                 "story_bible.foreshadowing": [
