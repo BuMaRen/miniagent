@@ -97,28 +97,63 @@ def build_llm_client() -> LLMClient:
     )
 
 
+def _print_outline_summary(context: dict[str, Any]) -> None:
+    chapters = context.get("story_bible.chapters") or []
+    foreshadowing = context.get("story_bible.foreshadowing") or []
+    print(f"共 {len(chapters)} 章:")
+    for chapter in chapters:
+        print(f"  第{chapter.get('index')}章《{chapter.get('title')}》: {chapter.get('beat_summary')}")
+    if foreshadowing:
+        print("伏笔:")
+        for item in foreshadowing:
+            print(f"  [{item.get('planted_in_chapter')}] {item.get('description')}")
+
+
+def _print_chapter_summary(context: dict[str, Any]) -> None:
+    text = context.get("chapter_text", "")
+    preview = text[:300] + ("……" if len(text) > 300 else "")
+    print(f"本章正文预览(共 {len(text)} 字):\n{preview}")
+
+
 def make_checkpoint_handler(auto_approve: bool):
-    """CLI 版 CheckpointHandler:大纲确认走交互式确认(或 --auto-approve 自动通过),
-    Loop 超限升级的断点默认接受最后一版并打印提示,供人工事后复核。"""
+    """CLI 版 CheckpointHandler。
+
+    "confirm_outline"/"chapter_pause" 现在是 outline_review / chapter_review 这两条
+    ReviewChain 的一环(见 stages.build_outline_review_chain /
+    build_chapter_review_chain):AI critic 通过后才轮到它们,契约与 AI critic
+    相同:{"passed": bool, "feedback": str}。回复不通过时必须给出 feedback,
+    外层 Loop(outline_loop / chapter_review_loop)会据此调用 reviser 重新生成,
+    下一轮重新走一遍 AI + 人工这整条链,直到人工通过或达到 max_iterations
+    (此时会以外层 Loop 自己的名字——如 "outline_loop"——触发下面的兜底分支,
+    而不是这两个 if 分支)。
+    """
 
     def handler(request: CheckpointRequest) -> dict[str, Any]:
         print(f"\n=== Checkpoint: {request.name} ===")
         if request.prompt:
             print(request.prompt)
         if request.name == "confirm_outline":
+            _print_outline_summary(request.context or {})
             if auto_approve:
                 print("[auto] 已自动确认大纲,继续执行。")
-                return {"approved": True}
+                return {"passed": True, "feedback": ""}
             answer = input("是否批准当前大纲? [y/N] ").strip().lower()
-            return {"approved": answer == "y"}
+            if answer == "y":
+                return {"passed": True, "feedback": ""}
+            feedback = input("请输入修改意见(将据此重新生成大纲): ").strip()
+            return {"passed": False, "feedback": feedback}
         if request.name == "chapter_pause":
+            _print_chapter_summary(request.context or {})
             if auto_approve:
-                return {}
-            answer = input("是否继续下一章? [Y/n] ").strip().lower()
-            if answer in ("n", "no"):
+                return {"passed": True, "feedback": ""}
+            answer = input("本章是否通过? [Y]通过并继续 / [n]提出修改意见 / [q]暂停保存进度: ").strip().lower()
+            if answer in ("q", "quit"):
                 print("[info] 已选择暂停,将保存进度并落地当前产物,可稍后续跑。")
                 raise CheckpointPause(request.name)
-            return {}
+            if answer in ("n", "no"):
+                feedback = input("请输入修改意见(将据此重新修订本章): ").strip()
+                return {"passed": False, "feedback": feedback}
+            return {"passed": True, "feedback": ""}
         print("[warn] Loop 已达最大迭代次数仍未通过评审,自动接受最后一版,请事后复核。")
         return request.context or {}
 

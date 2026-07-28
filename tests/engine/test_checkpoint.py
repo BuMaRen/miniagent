@@ -34,6 +34,7 @@ class CheckpointWithHandlerTests(unittest.TestCase):
         self.assertEqual(result, {"draft": "x", "approved": True})
         self.assertEqual(received[0].name, "confirm_outline")
         self.assertEqual(received[0].prompt, "Approve?")
+        self.assertEqual(received[0].context, {"draft": "x"})
 
     def test_resume_input_schema_validates_handler_output(self):
         def handler(request):

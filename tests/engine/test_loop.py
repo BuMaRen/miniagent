@@ -1,8 +1,10 @@
 import unittest
 
 from engine.context import CheckpointRequest, LifecycleHooks, RunContext
+from engine.primitives.checkpoint import Checkpoint
 from engine.primitives.loop import Loop, LoopExceededError, OnExceed
 from state.backends.memory import InMemoryStateStore
+from state.schema import StateSchema
 
 
 class _FixedNode:
@@ -98,6 +100,45 @@ class LoopEventuallyPassesTests(unittest.TestCase):
         loop.run(_make_ctx(hooks=hooks), {})
         self.assertEqual(calls[0], ("before", "loop", 0))
         self.assertEqual(calls[1], ("after", "loop", 0, True))
+
+
+class LoopWithCheckpointAsCriticTests(unittest.TestCase):
+    """Checkpoint.run() 返回 inputs 与 resume_input 的合并结果,天然是 Loop critic
+    契约({"passed", "feedback"})的超集,因此可以直接把 Checkpoint 当 Loop 的
+    critic 用来做"人工审阅驱动重写"(见 scenarios/novel/stages.py 的
+    build_outline_human_review_checkpoint / build_chapter_human_review_checkpoint)。
+    这里在通用引擎层面锁定这个组合确实按预期工作。"""
+
+    def test_human_rejection_with_feedback_drives_reviser_then_passes(self):
+        producer = _FixedNode("producer", {"draft": "v1"})
+        reviser = _EchoReviser("reviser")
+        critic = Checkpoint(
+            name="human_review",
+            resume_input_schema=StateSchema("review", {"passed": bool, "feedback": str}),
+        )
+
+        answers = iter(
+            [
+                {"passed": False, "feedback": "改一下开头"},
+                {"passed": True, "feedback": ""},
+            ]
+        )
+        seen_context = []
+
+        def handler(request):
+            seen_context.append(request.context)
+            return next(answers)
+
+        loop = Loop(name="loop", producer=producer, critic=critic, reviser=reviser)
+        ctx = _make_ctx(checkpoint_handler=handler)
+
+        result = loop.run(ctx, {})
+
+        self.assertEqual(reviser.calls, 1)
+        self.assertEqual(result["draft"], "v1!")
+        # 人工两次看到的都是当时正在被评审的内容,而不是空文案。
+        self.assertEqual(seen_context[0]["draft"], "v1")
+        self.assertEqual(seen_context[1]["draft"], "v1!")
 
 
 class LoopExceedTests(unittest.TestCase):

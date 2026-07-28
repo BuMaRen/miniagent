@@ -65,10 +65,12 @@ export ANTHROPIC_API_KEY=sk-...   # 或 OPENAI_API_KEY
 python -m scenarios.novel.run --auto-approve
 ```
 
-`run.py` 会把大纲评审断点(`confirm_outline`)交给一个交互式 CLI
-handler(除非传 `--auto-approve`);Loop 超限升级的断点默认接受最后一版
-并打印提示,供人工事后复核。状态持久化在 `--output-dir` 下的一个 JSON
-文件里,进程中断后重跑同一条命令即可从断点续跑。
+`run.py` 会把大纲评审(`confirm_outline`)、逐章确认(`chapter_pause`)这两个
+人工断点交给一个交互式 CLI handler(除非传 `--auto-approve`):不通过时会追问
+一句修改意见,该意见会驱动对应的 `outline_generation`/`chapter_revision`
+重新生成,再拿新版本回来给你确认,不是单纯的"过/不过"两个哑按钮。Loop 超限
+升级的断点默认接受最后一版并打印提示,供人工事后复核。状态持久化在
+`--output-dir` 下的一个 JSON 文件里,进程中断后重跑同一条命令即可从断点续跑。
 
 ## 要把它"更专业地生产小说",预期改什么
 

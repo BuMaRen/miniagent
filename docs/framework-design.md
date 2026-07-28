@@ -29,7 +29,7 @@
 初读容易把 Node 和 Stage 当成两个平级、职责重叠的概念。它们其实**不在同一层级**:
 
 - **Node 是"协议 / 接口"(Python `Protocol`),不是一个可实例化的类。** 它只规定一件事:凡是想被引擎当成"一步"来驱动的东西,都必须有 `name` 和 `run(ctx, inputs) -> outputs`。Node 本身没有任何实现体。
-- **Stage 是 Node 的具体实现之一。** 除了 Stage,四个控制流原语(Sequence / Loop / ForEach / Checkpoint)也都实现了 Node。
+- **Stage 是 Node 的具体实现之一。** 除了 Stage,四个控制流原语(Sequence / Loop / ForEach / Checkpoint)也都实现了 Node。**场景方也可以自己写一个满足 Node 的类型**(见 §6.5)。
 
 ```mermaid
 flowchart TB
@@ -39,6 +39,7 @@ flowchart TB
   N --> LP["Loop<br/>组合节点 · 编排"]
   N --> FE["ForEach<br/>组合节点 · 编排"]
   N --> CP["Checkpoint<br/>特殊节点 · 暂停/恢复"]
+  N --> X["场景自定义节点<br/>由场景方提供 · 引擎不感知"]
 ```
 
 打个比方:Node 相当于 `interface Runnable`,Stage 相当于 `class XxxTask implements Runnable`——一个是契约,一个是履行契约的人,不存在"职责冲突"。
@@ -56,7 +57,7 @@ flowchart TB
 | 是什么 | 协议 / 接口(`Protocol`) | 一个具体 `dataclass` |
 | 层级 | 抽象 | 实现(五种节点之一) |
 | 有 run 实现吗 | 没有,只声明签名 | 有,真正的执行逻辑 |
-| 还有谁是它 | Sequence / Loop / ForEach / Checkpoint | —— |
+| 还有谁是它 | Sequence / Loop / ForEach / Checkpoint,以及场景方自定义的节点 | —— |
 | 职责 | 规定"可执行节点统一长什么样" | 把一步"输入→输出"落地:校验、读切片、调 executor、写回 |
 
 一句话:**Node 定义"什么算一个可执行的步骤";Stage 是"其中会真正产出内容的那一种步骤"。前者是形状,后者是内容。**
@@ -156,6 +157,18 @@ Checkpoint:
 
 流程执行到这里暂停,等待外部输入后再继续。是否设置、设置在哪里,完全由场景方在 Workflow 定义里决定,引擎只提供"能暂停并恢复"这个能力。
 
+### 6.5 场景自定义节点 —— 不该新增原语的那些情况
+
+上面四个原语刻意都是**控制流的形状**(顺序、循环、遍历、暂停),它们与场景无关,因此值得放进引擎。但很多需求虽然长得像"要一个新原语",本质上却是**某种策略**——策略属于场景,不属于引擎。
+
+判断标准很简单:**它描述的是"执行结构长什么样",还是"什么情况下算合格 / 该怎么组织判断"?** 前者才是原语。
+
+需要后者时,场景方**不必也不应该改引擎**:`Node` 是一个 Protocol(结构化类型),只要写一个带 `name` 和 `run(ctx, inputs) -> outputs` 的类,就自动是合法的 Node,可以直接塞进 `Loop` 的任一槽位、`Sequence.nodes`、`ForEach.body`,与内置原语平起平坐——不需要继承任何基类,也不需要在引擎里登记类型。
+
+一个真实例子(小说场景的 `ReviewChain`,见 `scenarios/novel/review_chain.py`):"AI critic 先挡掉明显问题,通过后再让人工把关"。它把两个 critic 串起来短路求值,整体仍满足 `{passed, feedback}` 契约,于是能直接顶替 `Loop` 的 `critic`——`Loop` 完全不知道自己的 critic 内部还套了几层。这类"多道关卡"是评审策略,不同场景要的关卡数和顺序都不一样,所以它留在场景侧;引擎这边一行都不用改。
+
+> 顺带说明:`Checkpoint.run()` 的返回值(流入的 `inputs` 与人工 `resume_input` 合并)天然是 critic 契约的超集,所以 `Checkpoint` 本身也能当 critic 用。"AI 评审 + 人工把关"因此是零成本组合出来的,不需要为它引入任何新概念(见 [workflow-design.md](workflow-design.md) §5)。
+
 ## 7. Workflow 定义 —— 场景方的组合方式
 
 场景方通过组合以上原语 + 提供 State Schema + 挂载 ToolSet 来定义一个具体工作流,形式上类似:
@@ -204,7 +217,7 @@ toolsets:
 2. **拆 Stage**:把整个任务拆成若干输入输出明确的步骤,写出每个 Stage 的 `input_schema`/`output_schema`。
 3. **识别需要质检的环节**,给对应 Stage 套一层 `Loop`(producer/critic/reviser + 退出条件)。
 4. **识别需要对列表重复处理的环节**(如"逐章"/"逐条"),套一层 `ForEach`。
-5. **决定哪些节点需要人工介入**,插入 `Checkpoint`。
+5. **决定哪些节点需要人工介入**,插入 `Checkpoint`;如果人工审阅该落在某个已有 `Loop` 的评审环节里(而不是生成完之后再单独确认),写一个自定义 Node(§6.5)把 `Checkpoint` 和 AI critic 串起来,直接顶替原来的 `critic`。
 6. **为每个 Stage 开发/挂载 ToolSet**——这是主要的开发工作量所在,流程结构(2–5 步)通常一次设计好之后很少再变。
 7. 组装成 Workflow 定义并运行。
 
@@ -213,7 +226,7 @@ toolsets:
 [workflow-design.md](workflow-design.md) 是按上述步骤产出的第一个具体实例:
 
 - 其中的每个阶段(立意扩展、角色设计、大纲生成…)都是一个 Stage 配置。
-- 大纲评审(3.5)、章节审校(3.8)都是同一个 `Loop` 原语的两次独立实例化。
+- 大纲评审(3.5)、章节审校(3.8)都是同一个 `Loop` 原语的两次独立实例化,且都用场景自定义的 `ReviewChain`(§6.5)把 AI critic 与人工 `Checkpoint` 串成同一个 critic,实现"AI 通过后再问人,人工反馈同样驱动 reviser 重写"——引擎侧没有为此新增任何原语。
 - 逐章撰写(3.6)是 `ForEach(chapters, body=Loop(...))` 的实例化。
 - 故事圣经([story-bible-schema.md](story-bible-schema.md))是 State Schema 的一个具体实例,不属于引擎本身。
 

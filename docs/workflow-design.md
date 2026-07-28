@@ -130,24 +130,24 @@ state_schema: story-bible-schema.md
 stages:
   - sequence: [input_parsing, concept_expansion, character_world_design]
 
-  - loop:                      # 3.4 + 3.5
+  - loop:                      # 3.4 + 3.5;critic 是一条链,见 §5
       producer: outline_generation
-      critic: outline_critic
+      critic: outline_review     # ReviewChain([outline_critic, confirm_outline])
       reviser: outline_generation
       max_iterations: 3
       on_exceed: escalate_to_checkpoint
 
-  - checkpoint: confirm_outline   # 见 §5
-
   - foreach:                   # 3.6 + 3.8,对每一章;当前章大纲每轮发布到游标 item_path
       items_path: story_bible.chapters
       body:                     # 连贯性靠 body 的 reads 读故事圣经/滚动摘要,不靠 ForEach 喂前文
-        loop:
-          producer: chapter_drafting
-          critic: chapter_critic
-          reviser: chapter_revision
-          max_iterations: 3
-          on_exceed: escalate_to_checkpoint
+        sequence:
+          - loop:
+              producer: chapter_drafting
+              critic: chapter_review   # ReviewChain([chapter_critic, chapter_pause])
+              reviser: chapter_revision
+              max_iterations: 3
+              on_exceed: escalate_to_checkpoint
+          - chapter_finalize    # 整个 Loop(AI + 人工都通过)后,才把 status 推进到 reviewed
 
   - sequence: [manuscript_assembly_polish, final_qa]
 ```
@@ -168,8 +168,35 @@ stages:
 
 ## 5. Checkpoint 配置(可选,建议)
 
-- **`confirm_outline`**(强烈建议保留):大纲评审通过后,给用户一次确认/调整机会,这是全流程中改动成本最低的节点。
-- **阶段性审阅**(可选):每完成若干章节或全文完成后插入一个 Checkpoint,允许用户提出修改意见并触发对应 `foreach` 项的重新执行。
+`confirm_outline` 与 `chapter_pause` 不是裸的 `checkpoint:` 节点,而是分别和
+`outline_critic`/`chapter_critic` 一起,被 `ReviewChain`(场景自定义的 Node,见
+framework-design.md §6.5 与 `scenarios/novel/review_chain.py`)串成
+`outline_review` / `chapter_review` 这两条链,直接挂在各自 `Loop` 的 `critic`
+槽位上。这样设计而不是"AI critic loop 通过后,再单独套一层人工 Loop",是因为
+后者会让"人工反馈驱动的重写"绕开 AI 复核——人工提了修改意见、Reviser 改完,
+下一轮只有人工再看一遍,没人再替他把一次逻辑硬伤的关。串成一条链就没有这个
+问题:每一轮都是先过 AI、AI 通过了才轮到人工,人工不通过一样触发 Reviser
+重写,下一轮重新走一遍这整条链。
+
+这依赖两个事实:① `Checkpoint.run()` 的返回值(流入的 `inputs` 与人工
+`resume_input` 合并)天然是 Loop critic 契约 `{"passed": bool, "feedback": str}`
+的超集,只要 `resume_input_schema` 声明成这个形状即可;② `ReviewChain` 本身
+也满足这个契约,可以直接塞进 Loop 的 `critic`。两者叠加,人工审阅就成了"多一道
+关卡"而不是"多一条独立流程"——engine 侧不需要为此新增任何原语(见
+`scenarios/novel/stages.py` 的 `build_outline_review_chain` /
+`build_chapter_review_chain`)。
+
+- **`confirm_outline`**(强烈建议保留):大纲经 AI 评审通过后,给用户一次确认/
+  调整机会。人工回复 `passed: false` 并给出 `feedback` 时,与 AI critic 不通过
+  走的是同一条路径——`outline_generation` 重写,下一轮重新过一遍 AI + 人工,
+  直到人工通过或达到 `max_iterations`(此时走 `on_exceed` 的兜底策略)——这是
+  全流程中改动成本最低的节点。
+- **`chapter_pause`**:每章通过 AI 审校后,给用户一次逐章确认的机会,人工反馈
+  同样驱动 `chapter_revision` 就地重写本章;只有整条链(AI + 人工)都通过,
+  `chapter_finalize` 才会把该章 `status` 推进到 `reviewed`——不存在"先标记完成
+  再返工"的情况。
+- **其他阶段性审阅点**(可选):同样的"评审链里塞一个 Checkpoint"手法可以
+  套用到任何一个已有 Loop 上,不局限于这两处。
 
 ## 6. 开放问题 / 后续迭代方向
 

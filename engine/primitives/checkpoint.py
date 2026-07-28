@@ -50,7 +50,9 @@ class Checkpoint:
             ctx.resume = None
             return inputs
         if ctx.checkpoint_handler:
-            request = CheckpointRequest(name=self.name, prompt=self.prompt)
+            # context=inputs:把流入本断点的产出(草稿/待裁决内容)一并交给 handler,
+            # 否则人工只能看到 prompt 这句静态文案,看不到到底在评审什么。
+            request = CheckpointRequest(name=self.name, prompt=self.prompt, context=inputs)
             resume_input = ctx.checkpoint_handler(request)
             if self.resume_input_schema is not None:
                 self.resume_input_schema.validate(resume_input)

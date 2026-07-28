@@ -1,9 +1,14 @@
-"""把 ToolSet 挂到 Agent 上,组装成本场景需要的各个 Stage(docs/framework-design.md §8 步骤 2-3)。
+"""把 ToolSet 挂到 Agent 上,组装成本场景需要的各个节点(docs/framework-design.md §8 步骤 2-3)。
 
 对应 docs/workflow-design.md §4 的表格:每一行是一个 Stage,这里逐一实现。刻意
 不是每个 Stage 都用 Agent 执行——input_parsing(默认值填充)和 final_qa(字数/
 结构核对)是纯粹的确定性计算,用普通函数当 executor 更可靠也更省成本;这正是
 docs/framework-design.md §3.2 强调的"Stage 不关心怎么产出输出"的体现。
+
+本模块产出的也不全是 Stage:人工复核点是 Checkpoint(引擎原语),两条评审链是
+ReviewChain(本场景自定义的 Node,见 review_chain.py)。它们和 Stage 一起被登记
+进同一张 NodeRegistry、在 workflow.yaml 里以同样的方式按名引用——因为引擎要求的
+从来只是 Node 协议,而不是 Stage 这个具体类型。
 
 风格基调统一交给 _STYLE_GUIDE:现代人穿越西汉、随张骞出使西域这个题材最容易
 写成"金手指爽文",这里明确要求现实主义——身体的脆弱、制度的压迫感、信息不
@@ -17,6 +22,8 @@ from typing import Any, Callable
 from agent.agent import Agent
 from agent.memory import ConversationMemory
 from engine.context import RunContext
+from engine.primitives.checkpoint import Checkpoint
+from scenarios.novel.review_chain import ReviewChain
 from engine.stage import Stage
 from llm.client import LLMClient
 from state.schema import StateSchema
@@ -288,6 +295,31 @@ def build_outline_critic_stage(client: LLMClient) -> Stage:
 
 
 # ---------------------------------------------------------------------------
+# 3.5.1 大纲人工复核 —— 和 outline_critic 一起串成 ReviewChain,挂进 outline_loop
+# 的 critic 槽位:AI 通过后才轮到人工把关,人工不通过时填写的 feedback 与 AI 不
+# 通过时一样驱动 outline_generation 重写,下一轮重新走一遍 AI critic + 人工这整
+# 条链,而不是只把人工反馈单独拎出去、绕开 AI 复核再走一条独立循环。engine 侧
+# 无需为此新增任何原语——这正是 Checkpoint.run() 返回值(inputs 与 resume_input
+# 合并)天然是 critic 契约超集、又能被本场景自定义的 ReviewChain 串联的结果。
+# ---------------------------------------------------------------------------
+
+
+def build_outline_human_review_checkpoint() -> Checkpoint:
+    return Checkpoint(
+        name="confirm_outline",
+        resume_input_schema=CRITIC_OUTPUT_SCHEMA,
+        prompt="大纲已通过 AI 评审,请确认是否按此大纲进入逐章撰写;不通过请给出修改意见。",
+    )
+
+
+def build_outline_review_chain(client: LLMClient) -> ReviewChain:
+    return ReviewChain(
+        name="outline_review",
+        critics=[build_outline_critic_stage(client), build_outline_human_review_checkpoint()],
+    )
+
+
+# ---------------------------------------------------------------------------
 # 3.6 / 3.8 逐章撰写与章节审校(ForEach(chapters, body=Loop(...)))
 # ---------------------------------------------------------------------------
 
@@ -419,6 +451,30 @@ def build_chapter_revision_stage(client: LLMClient) -> Stage:
 
 
 # ---------------------------------------------------------------------------
+# 3.8.0.1 章节人工复核 —— 与 build_outline_review_chain 同样的手法:和
+# chapter_critic 串成 ReviewChain 挂进 chapter_review_loop 的 critic 槽位,
+# AI 评审通过后才轮到人工把关;人工的 feedback 与 AI 不通过时一样驱动
+# chapter_revision 重写本章,下一轮重新走一遍 AI + 人工这整条链,而不是等
+# 这一章被判定完成、状态推进到 "reviewed" 之后才发现要返工。
+# ---------------------------------------------------------------------------
+
+
+def build_chapter_human_review_checkpoint() -> Checkpoint:
+    return Checkpoint(
+        name="chapter_pause",
+        resume_input_schema=CRITIC_OUTPUT_SCHEMA,
+        prompt="本章已通过 AI 审校,请确认是否继续下一章;不通过请给出修改意见。",
+    )
+
+
+def build_chapter_review_chain(client: LLMClient) -> ReviewChain:
+    return ReviewChain(
+        name="chapter_review",
+        critics=[build_chapter_critic_stage(client), build_chapter_human_review_checkpoint()],
+    )
+
+
+# ---------------------------------------------------------------------------
 # 3.8.1 章节定稿 —— chapter_review_loop 的 critic 通过后,把该章 status 从
 # "drafted" 推进到 "reviewed"。纯函数 executor,不需要 LLM:producer/reviser
 # 只负责"写出 drafted 版本",到底有没有过审是 Loop/critic 的判断,不该也不
@@ -538,7 +594,12 @@ def build_final_qa_stage() -> Stage:
 
 
 # ---------------------------------------------------------------------------
-# 组装:把以上 Stage 注册进 NodeRegistry,供 workflow.py 的 from_spec 按名引用。
+# 组装:把以上节点注册进 NodeRegistry,供 workflow.py 的 from_spec 按名引用。
+#
+# 注意登记表收的是 **Node 而非 Stage**:下面既有 Stage(叶子,真正产出内容),
+# 也有 Checkpoint(引擎原语)和 ReviewChain(本场景自定义的组合节点)。三者
+# 唯一的共同点就是都满足 Node 协议——workflow.yaml 里按名引用它们时,也完全
+# 看不出彼此的区别。这正是 Node 被抽象成 Protocol 的意义所在。
 # ---------------------------------------------------------------------------
 
 STAGE_NAMES_NEEDING_LLM = (
@@ -553,11 +614,11 @@ STAGE_NAMES_NEEDING_LLM = (
 )
 
 
-def build_stage_registry(client_factory: ClientFactory):
-    """组装本场景全部 Stage,注册进一个新的 NodeRegistry。
+def build_node_registry(client_factory: ClientFactory):
+    """组装本场景全部节点(Stage / Checkpoint / ReviewChain),注册进一个新的 NodeRegistry。
 
     Args:
-        client_factory: 按 Stage 名取一个 LLMClient 的工厂函数。真实运行通常
+        client_factory: 按节点名取一个 LLMClient 的工厂函数。真实运行通常
             对所有名字返回同一个 client;线下演示按名字返回预置好回复的
             ScriptedLLMClient(见 offline_demo.py)。
     """
@@ -571,9 +632,9 @@ def build_stage_registry(client_factory: ClientFactory):
         build_character_world_design_stage(client_factory("character_world_design"))
     )
     registry.register(build_outline_generation_stage(client_factory("outline_generation")))
-    registry.register(build_outline_critic_stage(client_factory("outline_critic")))
+    registry.register(build_outline_review_chain(client_factory("outline_critic")))
     registry.register(build_chapter_drafting_stage(client_factory("chapter_drafting")))
-    registry.register(build_chapter_critic_stage(client_factory("chapter_critic")))
+    registry.register(build_chapter_review_chain(client_factory("chapter_critic")))
     registry.register(build_chapter_revision_stage(client_factory("chapter_revision")))
     registry.register(build_chapter_finalize_stage())
     registry.register(
@@ -587,5 +648,5 @@ __all__ = [
     "STORY_BIBLE_SCHEMA",
     "ClientFactory",
     "CHAPTER_LOOP_ITEM_PATH",
-    "build_stage_registry",
+    "build_node_registry",
 ]
