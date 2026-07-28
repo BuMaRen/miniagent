@@ -110,6 +110,11 @@ def _print_outline_summary(context: dict[str, Any]) -> None:
 
 
 def _print_chapter_summary(context: dict[str, Any]) -> None:
+    chapter_index = context.get("chapter_index")
+    chapters = context.get("story_bible.chapters") or []
+    chapter = next((c for c in chapters if c.get("index") == chapter_index), None)
+    if chapter and chapter.get("draft_summary"):
+        print(f"本章摘要:{chapter['draft_summary']}")
     text = context.get("chapter_text", "")
     preview = text[:300] + ("……" if len(text) > 300 else "")
     print(f"本章正文预览(共 {len(text)} 字):\n{preview}")
