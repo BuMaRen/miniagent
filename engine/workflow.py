@@ -169,7 +169,16 @@ class Workflow:
         # 裸字符串 = 直接引用一个已登记的 Stage。
         if isinstance(raw, str):
             return registry.get(raw)
-        if not isinstance(raw, dict) or len(raw) != 1:
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"节点定义 @ {path} 须为 Stage 名(str)或单键 dict,得到: {raw!r}"
+            )
+        # "model" 是可选的旁路字段(见 resolve_stage_models),与原语关键字同级
+        # 出现,不参与"单键 dict"结构判断——这里只需要忽略它,真正的解析在
+        # resolve_stage_models 里独立完成(那一步发生在 Stage 对象构造之前,
+        # 而这里拿到的 Node 早已建好,晚了)。
+        raw = {k: v for k, v in raw.items() if k != "model"}
+        if len(raw) != 1:
             raise ValueError(
                 f"节点定义 @ {path} 须为 Stage 名(str)或单键 dict,得到: {raw!r}"
             )
@@ -248,6 +257,63 @@ class Workflow:
                 prompt=body.get("prompt"),
             )
         raise ValueError(f"checkpoint @ {path} 的值须为名字(str)或 dict,得到: {body!r}")
+
+    # -- 每个 Stage 用哪个模型:独立于 from_spec 的一次轻量预扫描 -----------------
+
+    @classmethod
+    def resolve_stage_models(cls, spec: dict[str, Any]) -> dict[str, str]:
+        """按 stages 的树形结构,把 `model` 字段从祖先节点解析继承到每个叶子 Stage。
+
+        场景方可以给 stages 树里任意一个节点(sequence/loop/foreach 的容器,或
+        单个 stage 引用)标注 `model: <名字>`;它和该节点自己的原语关键字同级
+        出现(如 `{"sequence": [...], "model": "claude-sonnet-5"}`)。未标注的
+        子节点继承最近的祖先声明,一路向下直到某个子节点自己覆盖为止——这正是
+        "顶层 Node 及其包含的子 Node 都用同一个 model,除非子 Node 自己也选定
+        了 llm"这句话的字面含义。从未被任何祖先标注过的叶子 Stage,不会出现在
+        返回的 dict 里,调用方(通常是 client_factory)据此决定其默认 client。
+
+        之所以独立于 _build_node,是因为 registry 里的 Stage(含其内部已经
+        绑死的 LLMClient)在 from_spec 运行之前就已经造好了(见
+        scenarios/novel/workflow.build_workflow);model 必须在那一步之前解析
+        出来才用得上,晚到 from_spec 阶段就于事无补。因此这里只做"树 ->
+        {stage_name: model}"这一件轻量的事,不关心 Stage 具体是什么,也不像
+        _build_node 那样对结构做严格校验——结构错误自然会在随后的 from_spec
+        里被发现并报出更精确的错误。
+        """
+        result: dict[str, str] = {}
+        for raw in spec.get("stages", []):
+            cls._resolve_node_model(raw, None, result)
+        return result
+
+    @classmethod
+    def _resolve_node_model(
+        cls, raw: Any, inherited: str | None, result: dict[str, str]
+    ) -> None:
+        if isinstance(raw, str):
+            if inherited is not None:
+                result[raw] = inherited
+            return
+        if not isinstance(raw, dict):
+            return
+        model = raw.get("model", inherited)
+        body_items = {k: v for k, v in raw.items() if k != "model"}
+        if len(body_items) != 1:
+            return
+        (kind, body), = body_items.items()
+        if kind == "stage" and isinstance(body, str):
+            if model is not None:
+                result[body] = model
+        elif kind == "sequence" and isinstance(body, list):
+            for child in body:
+                cls._resolve_node_model(child, model, result)
+        elif kind == "loop" and isinstance(body, dict):
+            for key in ("producer", "critic", "reviser"):
+                if key in body:
+                    cls._resolve_node_model(body[key], model, result)
+        elif kind == "foreach" and isinstance(body, dict):
+            if "body" in body:
+                cls._resolve_node_model(body["body"], model, result)
+        # checkpoint 不涉及 LLM,没有对应分支。
 
 
 class NodeRegistry:

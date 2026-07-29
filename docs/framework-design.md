@@ -209,6 +209,27 @@ toolsets:
 
 这份定义完全没有出现"大纲""章节""小说"这类词——它是纯结构。小说生成工作流就是往这个结构里填入具体的 Stage、ToolSet 和 State Schema 之后得到的一个实例。
 
+### 7.1 model —— 按子树指定模型
+
+任意一个节点(`sequence`/`loop`/`foreach` 的容器,或单个 stage 引用)都可以额外标注一个 `model` 字段,和该节点自己的原语关键字同级出现:
+
+```yaml
+stages:
+  - sequence: [concept_expansion, character_world_design]
+    model: claude-sonnet-5   # 这个 sequence 及其包含的两个 Stage 都用这个模型
+
+  - loop:
+      producer: outline_generation
+      critic: outline_critic
+      reviser: outline_generation
+    model: claude-sonnet-5
+
+  - stage: chapter_critic
+    model: claude-haiku-4-5   # 单个 Stage 也可以单独覆盖
+```
+
+子节点没有自己标注 `model` 时,继承最近的祖先节点声明的值,一路向下直到某个子节点自己覆盖为止;从未被任何祖先标注过的叶子 Stage,退回场景方 `client_factory` 的默认模型。这件事由 `engine.workflow.Workflow.resolve_stage_models` 在 Stage 对象真正被构造之前完成一次轻量的树形扫描(必须在那之前,因为 Stage 内部的 `LLMClient` 一旦造好就定死了),产出一份 `{stage 名: model}` 映射,交给场景方在 `client_factory(stage_name, model)` 里按 `model` 选择/复用对应的 Provider client(见 `scenarios/novel/run.py` 的 `make_client_factory`)——引擎本身不关心某个模型名具体对应哪个 Provider 的 SDK,那仍是场景方 `client_factory` 的职责。
+
 ## 8. 二次开发指南
 
 要在这套框架上做出一个"专业地生产 X"的具体场景,典型步骤:

@@ -33,10 +33,14 @@ from scenarios.novel.state_schema import CHAPTER, CHARACTER, FORESHADOWING, STOR
 from scenarios.novel.toolsets.research import RESEARCH_TOOLSET
 from scenarios.novel.toolsets.qa import QA_TOOLSET, count_chinese_characters
 
-# 由调用方(run.py / offline_demo.py)提供:按 Stage 名给出一个 LLMClient。
-# 真实运行通常对所有 Stage 返回同一个 client 实例;线下演示按 Stage 返回预先
-# 编排好回复的 ScriptedLLMClient,便于在没有真实 API Key 时验证整条流水线。
-ClientFactory = Callable[[str], LLMClient]
+# 由调用方(run.py / offline_demo.py)提供:按 (Stage 名, 生效 model) 给出一个
+# LLMClient。model 是 engine.workflow.Workflow.resolve_stage_models 从
+# workflow.yaml 的树形结构里解析出的这个 Stage 应该使用的模型名(该 Stage 及其
+# 所有祖先节点都没标注过 model 时为 None,调用方此时应退回默认模型/默认
+# client)。真实运行通常按 model 分组复用同一个 client 实例(见 run.py 的
+# 缓存写法);线下演示按 Stage 名返回预先编排好回复的 ScriptedLLMClient,不关心
+# model,便于在没有真实 API Key 时验证整条流水线。
+ClientFactory = Callable[[str, str | None], LLMClient]
 
 _DEFAULT_MAX_STEPS = 8
 
@@ -665,31 +669,53 @@ STAGE_NAMES_NEEDING_LLM = (
 )
 
 
-def build_node_registry(client_factory: ClientFactory):
+def build_node_registry(
+    client_factory: ClientFactory, stage_models: dict[str, str] | None = None
+):
     """组装本场景全部节点(Stage / Checkpoint / ReviewChain),注册进一个新的 NodeRegistry。
 
     Args:
-        client_factory: 按节点名取一个 LLMClient 的工厂函数。真实运行通常
-            对所有名字返回同一个 client;线下演示按名字返回预置好回复的
-            ScriptedLLMClient(见 offline_demo.py)。
+        client_factory: 按 (节点名, model) 取一个 LLMClient 的工厂函数。真实运行
+            通常按 model 分组复用 client 实例;线下演示按名字返回预置好回复的
+            ScriptedLLMClient(见 offline_demo.py),忽略 model。
+        stage_models: workflow.yaml 里每个 Stage 名解析出的生效 model(见
+            engine.workflow.Workflow.resolve_stage_models);某个 Stage 及其
+            所有祖先节点都没标注过 model 时不出现在这个 dict 里,此时传给
+            client_factory 的 model 为 None。
     """
     # 延迟导入,避免 stages.py 与 workflow.py 之间产生循环导入。
     from engine.workflow import NodeRegistry
 
+    stage_models = stage_models or {}
+
+    def client_for(stage_name: str, model_key: str | None = None) -> LLMClient:
+        # model_key 存在,是因为 outline_critic/chapter_critic 这两个 Stage 在
+        # workflow.yaml 里从来不以自己的名字出现——它们被包进 ReviewChain,注册
+        # 进 registry、供 loop 的 critic 槽位引用的是 "outline_review"/
+        # "chapter_review" 这个复合名字(见下方两处调用)。resolve_stage_models
+        # 是照着 workflow.yaml 的树形结构解析的,记的是树上出现的名字,所以这里
+        # 查 stage_models 时必须换回那个复合名字,而不是 client_factory 看到的
+        # 内部 Stage 名。其余 Stage 两个名字本来就一致,不传 model_key 即可。
+        return client_factory(stage_name, stage_models.get(model_key or stage_name))
+
     registry = NodeRegistry()
     registry.register(build_input_parsing_stage())
-    registry.register(build_concept_expansion_stage(client_factory("concept_expansion")))
+    registry.register(build_concept_expansion_stage(client_for("concept_expansion")))
     registry.register(
-        build_character_world_design_stage(client_factory("character_world_design"))
+        build_character_world_design_stage(client_for("character_world_design"))
     )
-    registry.register(build_outline_generation_stage(client_factory("outline_generation")))
-    registry.register(build_outline_review_chain(client_factory("outline_critic")))
-    registry.register(build_chapter_drafting_stage(client_factory("chapter_drafting")))
-    registry.register(build_chapter_review_chain(client_factory("chapter_critic")))
-    registry.register(build_chapter_revision_stage(client_factory("chapter_revision")))
+    registry.register(build_outline_generation_stage(client_for("outline_generation")))
+    registry.register(
+        build_outline_review_chain(client_for("outline_critic", model_key="outline_review"))
+    )
+    registry.register(build_chapter_drafting_stage(client_for("chapter_drafting")))
+    registry.register(
+        build_chapter_review_chain(client_for("chapter_critic", model_key="chapter_review"))
+    )
+    registry.register(build_chapter_revision_stage(client_for("chapter_revision")))
     registry.register(build_chapter_finalize_stage())
     registry.register(
-        build_manuscript_assembly_polish_stage(client_factory("manuscript_assembly_polish"))
+        build_manuscript_assembly_polish_stage(client_for("manuscript_assembly_polish"))
     )
     registry.register(build_final_qa_stage())
     return registry

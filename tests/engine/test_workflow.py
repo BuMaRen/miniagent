@@ -232,6 +232,115 @@ class FromSpecTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Workflow.from_spec({"workflow": "wf", "stages": [123]}, self.registry)
 
+    def test_model_sibling_key_is_ignored_by_from_spec(self):
+        # "model" 只供 resolve_stage_models 使用;from_spec 必须容忍它出现在
+        # 原语关键字旁边,不当成"多出一个未知键"报错。
+        wf = Workflow.from_spec(
+            {
+                "workflow": "wf",
+                "stages": [{"sequence": ["outline", "reviser"], "model": "claude-sonnet-5"}],
+            },
+            self.registry,
+        )
+        self.assertEqual(len(wf.nodes[0].nodes), 2)
+
+
+class ResolveStageModelsTests(unittest.TestCase):
+    def test_no_model_anywhere_yields_empty_mapping(self):
+        spec = {"workflow": "wf", "stages": ["outline", {"sequence": ["critic", "reviser"]}]}
+        self.assertEqual(Workflow.resolve_stage_models(spec), {})
+
+    def test_model_on_sequence_inherited_by_bare_string_children(self):
+        spec = {
+            "workflow": "wf",
+            "stages": [{"sequence": ["outline", "critic"], "model": "claude-sonnet-5"}],
+        }
+        self.assertEqual(
+            Workflow.resolve_stage_models(spec),
+            {"outline": "claude-sonnet-5", "critic": "claude-sonnet-5"},
+        )
+
+    def test_child_stage_override_wins_over_inherited_model(self):
+        spec = {
+            "workflow": "wf",
+            "stages": [
+                {
+                    "sequence": [
+                        "outline",
+                        {"stage": "critic", "model": "claude-haiku-4-5"},
+                    ],
+                    "model": "claude-sonnet-5",
+                }
+            ],
+        }
+        self.assertEqual(
+            Workflow.resolve_stage_models(spec),
+            {"outline": "claude-sonnet-5", "critic": "claude-haiku-4-5"},
+        )
+
+    def test_model_on_loop_propagates_to_producer_critic_reviser(self):
+        spec = {
+            "workflow": "wf",
+            "stages": [
+                {
+                    "loop": {"producer": "outline", "critic": "critic", "reviser": "reviser"},
+                    "model": "claude-sonnet-5",
+                }
+            ],
+        }
+        self.assertEqual(
+            Workflow.resolve_stage_models(spec),
+            {
+                "outline": "claude-sonnet-5",
+                "critic": "claude-sonnet-5",
+                "reviser": "claude-sonnet-5",
+            },
+        )
+
+    def test_model_on_foreach_propagates_into_nested_body(self):
+        spec = {
+            "workflow": "wf",
+            "stages": [
+                {
+                    "foreach": {
+                        "items_path": "chapters",
+                        "body": {"loop": {"producer": "outline", "critic": "critic", "reviser": "reviser"}},
+                    },
+                    "model": "claude-sonnet-5",
+                }
+            ],
+        }
+        self.assertEqual(
+            Workflow.resolve_stage_models(spec),
+            {
+                "outline": "claude-sonnet-5",
+                "critic": "claude-sonnet-5",
+                "reviser": "claude-sonnet-5",
+            },
+        )
+
+    def test_nested_sequence_can_override_parent_model_for_its_own_subtree(self):
+        spec = {
+            "workflow": "wf",
+            "stages": [
+                {
+                    "sequence": [
+                        "outline",
+                        {"sequence": ["critic", "reviser"], "model": "claude-haiku-4-5"},
+                    ],
+                    "model": "claude-sonnet-5",
+                }
+            ],
+        }
+        self.assertEqual(
+            Workflow.resolve_stage_models(spec),
+            {
+                "outline": "claude-sonnet-5",
+                "critic": "claude-haiku-4-5",
+                "reviser": "claude-haiku-4-5",
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

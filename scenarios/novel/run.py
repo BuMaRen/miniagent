@@ -71,30 +71,86 @@ def _clear_resume_point(state_path: Path) -> None:
     _resume_path(state_path).unlink(missing_ok=True)
 
 
-def build_llm_client() -> LLMClient:
-    """按环境变量选一个真实 Provider;优先 Anthropic,其次 OpenAI。"""
-    if os.environ.get("ANTHROPIC_API_KEY"):
+_PROVIDER_DEFAULT_MODEL = {"anthropic": "claude-sonnet-4-5", "openai": "gpt-4o"}
+_PROVIDER_API_KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+
+
+def _infer_provider(model: str) -> str:
+    """按模型名判断该用哪个 Provider 的 SDK。
+
+    model 与 Provider 是绑死的、不是"哪个 API Key 存在就用哪个"能替代的关系——
+    claude-* 系列模型只能经 Anthropic 的 Messages API 调用,发去 OpenAI 兼容
+    接口只会得到一个牛头不对马嘴的报错。目前只接入了这两家 Provider,claude-*
+    走 Anthropic,其余(gpt-*/o1-* 等)按现有约定走 OpenAI 兼容协议。
+    """
+    return "anthropic" if model.startswith("claude") else "openai"
+
+
+def build_llm_client(model: str | None = None) -> LLMClient:
+    """按 model(若给出)或环境变量选一个真实 Provider 并构造 client。
+
+    Args:
+        model: 显式指定本次要用的模型名,通常来自 workflow.yaml 里某个节点标注
+            的 `model` 字段(见 engine.workflow.Workflow.resolve_stage_models)。
+            给出时由 _infer_provider 按模型名决定 Provider——不再看"哪个 API
+            Key 恰好存在",对应的 Key 缺失时直接报错,而不是把这个模型名发去
+            另一家的 SDK。为 None 时保留旧行为:优先 Anthropic,其次 OpenAI,
+            由环境变量里存在哪个 API Key 决定 Provider,模型名退回 NOVEL_MODEL
+            环境变量或该 Provider 的默认值。
+    """
+    if model is not None:
+        provider = _infer_provider(model)
+    elif os.environ.get("ANTHROPIC_API_KEY"):
+        provider = "anthropic"
+    elif os.environ.get("OPENAI_API_KEY"):
+        provider = "openai"
+    else:
+        raise RuntimeError(
+            "需要设置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY 才能真实运行本场景;"
+            "没有 API Key 时,可运行 `python -m scenarios.novel.offline_demo` "
+            "用脚本化回复体验完整流水线(见 scenarios/novel/README.md)。"
+        )
+
+    api_key_env = _PROVIDER_API_KEY_ENV[provider]
+    api_key = os.environ.get(api_key_env)
+    if not api_key:
+        raise RuntimeError(
+            f"workflow.yaml 里要求使用模型 {model!r},这需要 {provider} 的 SDK,"
+            f"但当前环境未设置 {api_key_env}。"
+        )
+    resolved_model = model or os.environ.get("NOVEL_MODEL", _PROVIDER_DEFAULT_MODEL[provider])
+
+    if provider == "anthropic":
         from llm.providers.anthropic import AnthropicClient
 
-        return AnthropicClient(
-            api_key=os.environ["ANTHROPIC_API_KEY"],
-            model=os.environ.get("NOVEL_MODEL", "claude-sonnet-4-5"),
-            max_tokens=32768,
-        )
-    if os.environ.get("OPENAI_API_KEY"):
-        from llm.providers.openai import OpenAIClient
+        return AnthropicClient(api_key=api_key, model=resolved_model, max_tokens=32768)
 
-        return OpenAIClient(
-            api_key=os.environ["OPENAI_API_KEY"],
-            model=os.environ.get("NOVEL_MODEL", "gpt-4o"),
-            base_url=os.environ.get("OPENAI_API_BASE_URL", "http://localhost:11434/v1"),
-            max_tokens=32768,
-        )
-    raise RuntimeError(
-        "需要设置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY 才能真实运行本场景;"
-        "没有 API Key 时,可运行 `python -m scenarios.novel.offline_demo` "
-        "用脚本化回复体验完整流水线(见 scenarios/novel/README.md)。"
+    from llm.providers.openai import OpenAIClient
+
+    return OpenAIClient(
+        api_key=api_key,
+        model=resolved_model,
+        base_url=os.environ.get("OPENAI_API_BASE_URL", "http://localhost:11434/v1"),
+        max_tokens=32768,
     )
+
+
+def make_client_factory():
+    """按 model 分组、按需惰性构造并复用 LLMClient。
+
+    workflow.yaml 里没有被任何节点标注过 model 的 Stage,收到的 model 是
+    None,这些 Stage 共用同一个"默认 client"——与改动前"所有 Stage 共用一个
+    client"的行为完全一致。只有显式标注了不同 model 的节点才会各自拿到一个
+    新建的 client,不会为同一个 model 反复创建连接。
+    """
+    clients: dict[str | None, LLMClient] = {}
+
+    def factory(_stage_name: str, model: str | None) -> LLMClient:
+        if model not in clients:
+            clients[model] = build_llm_client(model)
+        return clients[model]
+
+    return factory
 
 
 def _print_outline_summary(context: dict[str, Any]) -> None:
@@ -186,8 +242,7 @@ def main() -> None:
     args = parser.parse_args()
 
     brief = load_brief(args.brief)
-    client = build_llm_client()
-    workflow = build_workflow(client_factory=lambda _stage_name: client)
+    workflow = build_workflow(client_factory=make_client_factory())
 
     state_path = args.state_file or (args.output_dir / DEFAULT_STATE_FILE)
     state_store = JsonFileStateStore(state_path)

@@ -38,7 +38,8 @@ def build_workflow(
         spec_path: workflow.yaml 的路径,默认取本包内的那份。
     """
     spec = load_workflow_spec(spec_path)
-    registry = build_node_registry(client_factory)
+    stage_models = Workflow.resolve_stage_models(spec)
+    registry = build_node_registry(client_factory, stage_models)
     workflow = Workflow.from_spec(spec, registry)
     # from_spec 刻意只透传 spec 里的字符串引用(见其 docstring:"把字符串引用
     # 解析成具体 schema 不属本方法职责"),这里补上真正的 StateSchema 实例。

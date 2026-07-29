@@ -8,10 +8,17 @@ workflow: novel_generation
 state_schema: story_bible
 
 stages:
+  # model 是可选字段,与节点自己的原语关键字(sequence/loop/foreach/stage)同级
+  # 出现:标注在这里之后,本节点及其包含的全部子节点都会用这个模型,除非某个
+  # 子节点自己也标了 model(那就以子节点的为准,不再继续从这里往下继承)。
+  # 立意扩展与角色/世界观设计最吃"设定的一致性与创造力",这里显式钉住用
+  # claude-sonnet-5;没有标注 model 的节点(如下面几段)退回 client_factory 的
+  # 默认模型(见 run.py build_llm_client 的 NOVEL_MODEL 环境变量)。
   - sequence:
       - input_parsing
       - concept_expansion
       - character_world_design
+    model: claude-sonnet-5
 
   # outline_review 是一条 ReviewChain([outline_critic, confirm_outline]):
   # 每轮先过 AI 评审,AI 通过后才轮到人工把关(confirm_outline 是个

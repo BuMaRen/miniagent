@@ -290,12 +290,14 @@ def build_scripted_client_factory():
         ),
     }
 
-    def factory(stage_name: str) -> LLMClient:
+    def factory(stage_name: str, _model: str | None) -> LLMClient:
         # build_node_registry 会为 workflow.yaml 里提到的每个 Stage 名字都建一个
         # Agent(哪怕它在这次演示里实际不会被调用,比如 chapter_revision——本次
         # 演示的 critic 一次就通过,不会触发 reviser)。没预置回复的 Stage 给一个
         # 空列表:只要它真的不被调用就没事,一旦被调用会因为"用完了"而报错,
-        # 提醒开发者补一条脚本回复,而不是默默返回不相关的内容。
+        # 提醒开发者补一条脚本回复,而不是默默返回不相关的内容。_model(见
+        # engine.workflow.Workflow.resolve_stage_models)在离线演示里没有意义
+        # ——脚本化回复不真的调用任何模型,忽略即可。
         response = responses.get(stage_name)
         return ScriptedLLMClient([response] if response is not None else [])
 
