@@ -24,7 +24,7 @@ from agent.memory import ConversationMemory
 from engine.context import RunContext
 from engine.primitives.checkpoint import Checkpoint
 from scenarios.novel.review_chain import ReviewChain
-from engine.stage import Stage
+from engine.stage import Node, Stage
 from llm.client import LLMClient
 from state.schema import StateSchema
 from tools.registry import ToolRegistry
@@ -407,13 +407,44 @@ foreshadowing 供你核对矛盾。
 """
 
 
+def _set_chapter_status(ctx: RunContext, chapter_index: Any, status: str) -> None:
+    """把 story_bible.chapters 中下标为 chapter_index 的那一条 status 改写为 status。
+
+    直接经 ctx.state 读写,不走 Stage 的声明式 writes——调用方(chapter_critic /
+    chapter_pause)本身的输出契约是 critic 的 {passed, feedback},容不下额外的
+    story_bible.chapters 字段,只能以 Node 协议允许的"直接读写 ctx.state"来完成
+    这个旁路的状态推进,见 build_chapter_critic_stage / build_chapter_human_review_checkpoint。
+    """
+    chapters = ctx.state.get("story_bible.chapters", default=[]) or []
+    updated_chapters = [
+        {**chapter, "status": status} if chapter.get("index") == chapter_index else chapter
+        for chapter in chapters
+    ]
+    ctx.state.patch("story_bible.chapters", updated_chapters)
+
+
 def build_chapter_critic_stage(client: LLMClient) -> Stage:
     agent = _make_agent(
         client, _CHAPTER_CRITIC_PROMPT, toolsets=(QA_TOOLSET,), output_schema=CRITIC_OUTPUT_SCHEMA
     )
+
+    def executor(ctx: RunContext, inputs: dict[str, Any]) -> dict[str, Any]:
+        verdict = agent.run(ctx, inputs)
+        # AI 一过审就乐观地把该章 status 推进到 "reviewed",而不是等到
+        # chapter_pause 也点头之后才推进——chapter_pause 若选择"暂停保存进度"
+        # (见 run.py 的 CheckpointPause 分支),ForEach 会在暂停前先把游标
+        # advance 到下一章(engine/primitives/foreach.py 的 except 分支),
+        # 导致这一章再也不会被重新访问、chapter_finalize 也不会再跑到它。
+        # 乐观地先标 "reviewed" 保证了"卡在断点"不等于"永远卡在 drafted";
+        # 人工真的给出不通过意见时,由 chapter_pause 自己把它打回 "drafted"
+        # (build_chapter_human_review_checkpoint)。
+        if verdict.get("passed"):
+            _set_chapter_status(ctx, inputs.get("chapter_index"), "reviewed")
+        return verdict
+
     return Stage(
         name="chapter_critic",
-        executor=agent.run,
+        executor=executor,
         reads=[
             "story_bible.characters",
             "story_bible.world",
@@ -459,12 +490,36 @@ def build_chapter_revision_stage(client: LLMClient) -> Stage:
 # ---------------------------------------------------------------------------
 
 
-def build_chapter_human_review_checkpoint() -> Checkpoint:
-    return Checkpoint(
+class _ChapterHumanReviewCheckpoint:
+    """包一层 Checkpoint:人工给出"不通过"时把该章 status 从 chapter_critic 乐观
+    写入的 "reviewed" 打回 "drafted",驱动 chapter_review_loop 下一轮重新修订;
+    通过、或尚未决定就暂停(见 run.py 的 "q" 分支)时都保留 "reviewed"——
+    "暂停"不代表"不通过",不该把还没被人工否决的章节退回 drafted。
+
+    仍然是名副其实的 Node(name + run),可以像原生 Checkpoint 一样直接塞进
+    ReviewChain.critics;暂停/恢复的机制(ctx.resume 认领、CheckpointPause)
+    完全委托给内部持有的这个真正的 engine Checkpoint,这里只在其返回之后补一刀
+    状态写回,不侵入引擎的暂停语义。
+    """
+
+    def __init__(self, checkpoint: Checkpoint) -> None:
+        self._checkpoint = checkpoint
+        self.name = checkpoint.name
+
+    def run(self, ctx: RunContext, inputs: dict[str, Any]) -> dict[str, Any]:
+        result = self._checkpoint.run(ctx, inputs)
+        if not result.get("passed"):
+            _set_chapter_status(ctx, result.get("chapter_index"), "drafted")
+        return result
+
+
+def build_chapter_human_review_checkpoint() -> Node:
+    checkpoint = Checkpoint(
         name="chapter_pause",
         resume_input_schema=CRITIC_OUTPUT_SCHEMA,
         prompt="本章已通过 AI 审校,请确认是否继续下一章;不通过请给出修改意见。",
     )
+    return _ChapterHumanReviewCheckpoint(checkpoint)
 
 
 def build_chapter_review_chain(client: LLMClient) -> ReviewChain:
@@ -475,31 +530,27 @@ def build_chapter_review_chain(client: LLMClient) -> ReviewChain:
 
 
 # ---------------------------------------------------------------------------
-# 3.8.1 章节定稿 —— chapter_review_loop 的 critic 通过后,把该章 status 从
-# "drafted" 推进到 "reviewed"。纯函数 executor,不需要 LLM:producer/reviser
-# 只负责"写出 drafted 版本",到底有没有过审是 Loop/critic 的判断,不该也不
-# 需要让写作 Agent 自己声明"reviewed"——那等于让它给自己的作业判分。
+# 3.8.1 章节定稿 —— 兜底把该章 status 推进到 "reviewed"。正常路径下
+# chapter_critic 一过审就已经乐观地把 status 写成 "reviewed"(见
+# build_chapter_critic_stage 顶部的说明),这里再写一遍是幂等的;真正依赖
+# 这一步的是 chapter_review_loop 超过 max_iterations、按
+# on_exceed=escalate_to_checkpoint 升级为人工裁决后"自动接受最后一版"的路径
+# ——那条路径不经过 chapter_critic 的最终通过判定,该章此时仍停在 "drafted",
+# 要靠这里推一把才能继续往下一章走。纯函数 executor,不需要 LLM。
 # ---------------------------------------------------------------------------
 
 
 def chapter_finalize_executor(ctx: RunContext, inputs: dict[str, Any]) -> dict[str, Any]:
-    """把当前 ForEach 迭代对应的章节 status 改成 "reviewed",其余章节原样保留。"""
-    state = inputs.get("state", {})
-    current_index = (state.get(CHAPTER_LOOP_ITEM_PATH) or {}).get("index")
-    chapters = state.get("story_bible.chapters") or []
-    updated_chapters = [
-        {**chapter, "status": "reviewed"} if chapter.get("index") == current_index else chapter
-        for chapter in chapters
-    ]
-    return {"story_bible.chapters": updated_chapters}
+    current_index = (inputs.get("state", {}).get(CHAPTER_LOOP_ITEM_PATH) or {}).get("index")
+    _set_chapter_status(ctx, current_index, "reviewed")
+    return {}
 
 
 def build_chapter_finalize_stage() -> Stage:
     return Stage(
         name="chapter_finalize",
         executor=chapter_finalize_executor,
-        reads=[CHAPTER_LOOP_ITEM_PATH, "story_bible.chapters"],
-        writes=["story_bible.chapters"],
+        reads=[CHAPTER_LOOP_ITEM_PATH],
     )
 
 
