@@ -17,10 +17,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Iterator
 from openai import OpenAI
 
-from llm.client import LLMClient, ChatResponse
+from llm.client import LLMClient, ChatResponse, StreamEvent
 from llm.message import Message, ToolCall
 from tools.schema import ToolSchema
 
@@ -44,6 +44,12 @@ class OpenAIClient(LLMClient):
         response_schema: dict[str, Any] | None = None,
         **params: Any,
     ) -> ChatResponse:
+        # max_tokens 较大(长输出)时非流式请求容易触发 HTTP 超时,改走 stream
+        # 内部拿完整结果,调用方仍然只看到一个同步的 ChatResponse。
+        max_tokens = params.get("max_tokens", self._default_params.get("max_tokens"))
+        if self._should_stream(max_tokens):
+            return self._chat_via_stream(messages, tools, response_schema, **params)
+
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": [_to_openai_message(m) for m in messages],
@@ -76,6 +82,77 @@ class OpenAIClient(LLMClient):
         usage = completion.usage.model_dump() if completion.usage else {}
 
         return ChatResponse(message=message, tool_calls=tool_calls, usage=usage)
+
+    def stream(
+        self,
+        messages: list[Message],
+        tools: list[ToolSchema] | None = None,
+        response_schema: dict[str, Any] | None = None,
+        **params: Any,
+    ) -> Iterator[StreamEvent]:
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": [_to_openai_message(m) for m in messages],
+            "stream": True,
+            # 让最后一个 chunk 带上 usage,行为与非流式 completion.usage 对齐。
+            "stream_options": {"include_usage": True},
+            **self._default_params,
+            **params,
+        }
+        if tools:
+            payload["tools"] = [t.to_openai() for t in tools]
+        if response_schema is not None:
+            payload["response_format"] = _build_response_format(response_schema)
+
+        content_parts: list[str] = []
+        # 按 index 累积工具调用增量:OpenAI 把 name/arguments 拆在多个 chunk 里下发,
+        # 同一个 tool_call 的每个字段要按 index 对齐累加,收完才能整体解析。
+        tool_call_chunks: dict[int, dict[str, Any]] = {}
+        usage: dict[str, Any] = {}
+
+        for chunk in self._client.chat.completions.create(**payload):
+            if chunk.usage:
+                usage = chunk.usage.model_dump()
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+
+            if delta.content:
+                content_parts.append(delta.content)
+                yield StreamEvent(delta=delta.content)
+
+            for tc in delta.tool_calls or []:
+                entry = tool_call_chunks.setdefault(
+                    tc.index, {"id": None, "name": "", "arguments": ""}
+                )
+                if tc.id:
+                    entry["id"] = tc.id
+                if tc.function:
+                    if tc.function.name:
+                        entry["name"] += tc.function.name
+                    if tc.function.arguments:
+                        entry["arguments"] += tc.function.arguments
+
+        tool_calls = [
+            ToolCall(
+                id=entry["id"],
+                name=entry["name"],
+                arguments=json.loads(entry["arguments"] or "{}"),
+            )
+            for entry in (tool_call_chunks[i] for i in sorted(tool_call_chunks))
+        ]
+
+        message = Message(
+            role="assistant",
+            content="".join(content_parts) or None,
+            tool_calls=tool_calls,
+        )
+
+        yield StreamEvent(
+            done=True,
+            response=ChatResponse(message=message, tool_calls=tool_calls, usage=usage),
+        )
+
 
 def _build_response_format(schema: dict[str, Any]) -> dict[str, Any]:
     """把 provider-neutral 的 JSON Schema 包成 OpenAI 的 response_format 结构。"""

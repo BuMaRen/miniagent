@@ -79,7 +79,7 @@ def build_llm_client() -> LLMClient:
         return AnthropicClient(
             api_key=os.environ["ANTHROPIC_API_KEY"],
             model=os.environ.get("NOVEL_MODEL", "claude-sonnet-4-5"),
-            max_tokens=16384,
+            max_tokens=32768,
         )
     if os.environ.get("OPENAI_API_KEY"):
         from llm.providers.openai import OpenAIClient
@@ -88,7 +88,7 @@ def build_llm_client() -> LLMClient:
             api_key=os.environ["OPENAI_API_KEY"],
             model=os.environ.get("NOVEL_MODEL", "gpt-4o"),
             base_url=os.environ.get("OPENAI_API_BASE_URL", "http://localhost:11434/v1"),
-            max_tokens=16384,
+            max_tokens=32768,
         )
     raise RuntimeError(
         "需要设置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY 才能真实运行本场景;"

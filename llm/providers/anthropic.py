@@ -14,11 +14,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterator
 
 from anthropic import Anthropic
 
-from llm.client import LLMClient, ChatResponse
+from llm.client import LLMClient, ChatResponse, StreamEvent
 from llm.message import Message, ToolCall
 from tools.schema import ToolSchema
 
@@ -44,6 +44,42 @@ class AnthropicClient(LLMClient):
         response_schema: dict[str, Any] | None = None,
         **params: Any,
     ) -> ChatResponse:
+        payload = self._build_payload(messages, tools, response_schema, **params)
+
+        # max_tokens 较大(长输出)时非流式请求容易触发 HTTP 超时,改走 stream
+        # 内部拿完整结果,调用方仍然只看到一个同步的 ChatResponse。
+        if self._should_stream(payload["max_tokens"]):
+            return self._chat_via_stream(messages, tools, response_schema, **params)
+
+        response = self._client.messages.create(**payload)
+        return _to_chat_response(response)
+
+    def stream(
+        self,
+        messages: list[Message],
+        tools: list[ToolSchema] | None = None,
+        response_schema: dict[str, Any] | None = None,
+        **params: Any,
+    ) -> Iterator[StreamEvent]:
+        payload = self._build_payload(messages, tools, response_schema, **params)
+
+        # messages.stream() 是 SDK 提供的高层封装:边收边攒 accumulated message,
+        # text_stream 只暴露文本增量,工具调用块要靠 get_final_message() 拿完整结果。
+        with self._client.messages.stream(**payload) as stream:
+            for text in stream.text_stream:
+                yield StreamEvent(delta=text)
+            response = stream.get_final_message()
+
+        yield StreamEvent(done=True, response=_to_chat_response(response))
+
+    def _build_payload(
+        self,
+        messages: list[Message],
+        tools: list[ToolSchema] | None,
+        response_schema: dict[str, Any] | None,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """组装请求体,chat() 与 stream() 共用同一份转换逻辑。"""
         system = _extract_system(messages)
 
         payload: dict[str, Any] = {
@@ -59,28 +95,30 @@ class AnthropicClient(LLMClient):
             payload["tools"] = [t.to_anthropic() for t in tools]
         if response_schema is not None:
             payload["output_config"] = _build_output_config(response_schema)
+        return payload
 
-        response = self._client.messages.create(**payload)
 
-        content_text: list[str] = []
-        tool_calls: list[ToolCall] = []
-        for block in response.content:
-            if block.type == "text":
-                content_text.append(block.text)
-            elif block.type == "tool_use":
-                tool_calls.append(
-                    ToolCall(id=block.id, name=block.name, arguments=dict(block.input))
-                )
+def _to_chat_response(response: Any) -> ChatResponse:
+    """把 Anthropic 的 Message 响应转成框架标准的 ChatResponse。"""
+    content_text: list[str] = []
+    tool_calls: list[ToolCall] = []
+    for block in response.content:
+        if block.type == "text":
+            content_text.append(block.text)
+        elif block.type == "tool_use":
+            tool_calls.append(
+                ToolCall(id=block.id, name=block.name, arguments=dict(block.input))
+            )
 
-        message = Message(
-            role="assistant",
-            content="\n".join(content_text) if content_text else None,
-            tool_calls=tool_calls,
-        )
+    message = Message(
+        role="assistant",
+        content="\n".join(content_text) if content_text else None,
+        tool_calls=tool_calls,
+    )
 
-        usage = response.usage.model_dump() if response.usage else {}
+    usage = response.usage.model_dump() if response.usage else {}
 
-        return ChatResponse(message=message, tool_calls=tool_calls, usage=usage)
+    return ChatResponse(message=message, tool_calls=tool_calls, usage=usage)
 
 
 def _build_output_config(schema: dict[str, Any]) -> dict[str, Any]:
