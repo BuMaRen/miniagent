@@ -1,0 +1,2 @@
+- [ ] workflow.yml 中支持 model 指定
+- [ ] qwen 要开启缓存
