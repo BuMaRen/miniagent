@@ -8,7 +8,7 @@ offline_demo.py 用脚本化回复走一遍完整流水线,验证接线是否正
 用法示例:
 
     ANTHROPIC_API_KEY=sk-... python -m scenarios.novel.run \\
-        --output-dir scenarios/novel/output --auto-approve
+        --output-dir scenarios/novel/output --auto-approve --log-chats
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from engine.context import CheckpointRequest, LifecycleHooks, ResumePoint, RunCo
 from engine.primitives.checkpoint import CheckpointPause
 from engine.workflow import WorkflowFailure
 from llm.client import LLMClient
+from llm.logging_client import LoggingLLMClient
 from state.backends.json_file import JsonFileStateStore
 
 from scenarios.novel.landing import land_output
@@ -87,7 +88,7 @@ def _infer_provider(model: str) -> str:
     return "anthropic" if model.startswith("claude") else "openai"
 
 
-def build_llm_client(model: str | None = None) -> LLMClient:
+def build_llm_client(model: str | None = None, log_dir: Path | None = None) -> LLMClient:
     """按 model(若给出)或环境变量选一个真实 Provider 并构造 client。
 
     Args:
@@ -98,6 +99,8 @@ def build_llm_client(model: str | None = None) -> LLMClient:
             另一家的 SDK。为 None 时保留旧行为:优先 Anthropic,其次 OpenAI,
             由环境变量里存在哪个 API Key 决定 Provider,模型名退回 NOVEL_MODEL
             环境变量或该 Provider 的默认值。
+        log_dir: 非 None 时,给构造出的 client 包一层 LoggingLLMClient,把每次
+            chat() 的请求/响应落盘到该目录(见 --log-chats)。
     """
     if model is not None:
         provider = _infer_provider(model)
@@ -124,31 +127,39 @@ def build_llm_client(model: str | None = None) -> LLMClient:
     if provider == "anthropic":
         from llm.providers.anthropic import AnthropicClient
 
-        return AnthropicClient(api_key=api_key, model=resolved_model, max_tokens=32768)
+        client: LLMClient = AnthropicClient(api_key=api_key, model=resolved_model, max_tokens=32768)
+    else:
+        from llm.providers.openai import OpenAIClient
 
-    from llm.providers.openai import OpenAIClient
+        client = OpenAIClient(
+            api_key=api_key,
+            model=resolved_model,
+            base_url=os.environ.get("OPENAI_API_BASE_URL", "http://localhost:11434/v1"),
+            max_tokens=32768,
+        )
 
-    return OpenAIClient(
-        api_key=api_key,
-        model=resolved_model,
-        base_url=os.environ.get("OPENAI_API_BASE_URL", "http://localhost:11434/v1"),
-        max_tokens=32768,
-    )
+    if log_dir is not None:
+        client = LoggingLLMClient(client, log_dir)
+    return client
 
 
-def make_client_factory():
+def make_client_factory(log_dir: Path | None = None):
     """按 model 分组、按需惰性构造并复用 LLMClient。
 
     workflow.yaml 里没有被任何节点标注过 model 的 Stage,收到的 model 是
     None,这些 Stage 共用同一个"默认 client"——与改动前"所有 Stage 共用一个
     client"的行为完全一致。只有显式标注了不同 model 的节点才会各自拿到一个
     新建的 client,不会为同一个 model 反复创建连接。
+
+    Args:
+        log_dir: 透传给 build_llm_client,非 None 时每个新建的 client 都会被
+            LoggingLLMClient 包一层(见 --log-chats)。
     """
     clients: dict[str | None, LLMClient] = {}
 
     def factory(_stage_name: str, model: str | None) -> LLMClient:
         if model not in clients:
-            clients[model] = build_llm_client(model)
+            clients[model] = build_llm_client(model, log_dir)
         return clients[model]
 
     return factory
@@ -239,10 +250,16 @@ def main() -> None:
     parser.add_argument(
         "--auto-approve", action="store_true", help="大纲确认断点自动通过,不进入交互式输入"
     )
+    parser.add_argument(
+        "--log-chats",
+        action="store_true",
+        help="记录每次 chat() 的请求/响应到 --output-dir 下的 log 子目录,一次 chat 一个文件",
+    )
     args = parser.parse_args()
 
     brief = load_brief(args.brief)
-    workflow = build_workflow(client_factory=make_client_factory())
+    log_dir = (args.output_dir / "log") if args.log_chats else None
+    workflow = build_workflow(client_factory=make_client_factory(log_dir))
 
     state_path = args.state_file or (args.output_dir / DEFAULT_STATE_FILE)
     state_store = JsonFileStateStore(state_path)
