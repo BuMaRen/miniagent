@@ -4,9 +4,9 @@ run.py 需要 ANTHROPIC_API_KEY/OPENAI_API_KEY 才能工作,但"这套接线到�
 应该不依赖网络和账单。这里给每个需要 LLM 的 Stage 配一个
 ScriptedLLMClient(与 tests/agent/test_agent.py 用的手法一致):预先写好这一次
 要"生成"的内容,严格按各 Stage 在 stages.py 里约定的 JSON 契约打包成响应。
-Critic 类 Stage 统一脚本成 {"passed": true},所以 Loop 一次通过、不触发
-reviser——这是为了让"跑通全流程"这件事在没有真实模型判断力的情况下依然
-确定性可复现,不代表真实运行时 Loop 不会修订。
+Critic 类 Stage 统一脚本成 {"needs_revision": false},所以每个 Loop 的 body
+一轮就跑完、不会重开第二轮——这是为了让"跑通全流程"这件事在没有真实模型判断力
+的情况下依然确定性可复现,不代表真实运行时 Loop 不会修订。
 
 跑一遍这个脚本,得到的不是"假数据占位符",而是本场景第一版参考实现真正要
 交付的内容:第一章《初到西汉》,一名现代历史系研究生跌进西汉建元年间长安、
@@ -33,6 +33,7 @@ from llm.message import Message
 from state.backends.memory import InMemoryStateStore
 
 from scenarios.novel.landing import land_output
+from scenarios.novel.stages import NEEDS_REVISION_KEY
 from scenarios.novel.state_schema import empty_state
 from scenarios.novel.workflow import build_workflow
 
@@ -59,8 +60,8 @@ def _final(payload: dict[str, Any]) -> ChatResponse:
     return ChatResponse(message=Message(role="assistant", content=content))
 
 
-def _passed(feedback: str = "") -> ChatResponse:
-    return _final({"passed": True, "feedback": feedback})
+def _no_revision_needed(feedback: str = "") -> ChatResponse:
+    return _final({NEEDS_REVISION_KEY: False, "feedback": feedback})
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +230,7 @@ def build_scripted_client_factory():
                 ],
             }
         ),
-        "outline_critic": _passed(),
+        "outline_critic": _no_revision_needed(),
         "chapter_drafting": _final(
             {
                 "story_bible.chapters": [
@@ -255,7 +256,7 @@ def build_scripted_client_factory():
                 "chapter_text": CHAPTER_1_TEXT,
             }
         ),
-        "chapter_critic": _passed(),
+        "chapter_critic": _no_revision_needed(),
         "manuscript_assembly_polish": _final(
             {
                 "story_bible.chapters": [
@@ -292,10 +293,10 @@ def build_scripted_client_factory():
 
     def factory(stage_name: str, _model: str | None) -> LLMClient:
         # build_node_registry 会为 workflow.yaml 里提到的每个 Stage 名字都建一个
-        # Agent(哪怕它在这次演示里实际不会被调用,比如 chapter_revision——本次
-        # 演示的 critic 一次就通过,不会触发 reviser)。没预置回复的 Stage 给一个
-        # 空列表:只要它真的不被调用就没事,一旦被调用会因为"用完了"而报错,
-        # 提醒开发者补一条脚本回复,而不是默默返回不相关的内容。_model(见
+        # Agent。没预置回复的 Stage 给一个空列表:只要它真的不被调用就没事,一旦
+        # 被调用会因为"用完了"而报错,提醒开发者补一条脚本回复,而不是默默返回
+        # 不相关的内容。每个 Stage 也只预置一条回复,所以"Loop 意外重开了一轮"
+        # 这种接线错误同样会当场炸出来。_model(见
         # engine.workflow.Workflow.resolve_stage_models)在离线演示里没有意义
         # ——脚本化回复不真的调用任何模型,忽略即可。
         response = responses.get(stage_name)
@@ -307,9 +308,9 @@ def build_scripted_client_factory():
 def _auto_checkpoint_handler(request: CheckpointRequest) -> dict[str, Any]:
     print(f"[checkpoint:auto] {request.name} -> 自动通过(离线演示不做交互式确认)")
     if request.name in ("confirm_outline", "chapter_pause"):
-        # confirm_outline / chapter_pause 现在是各自 Loop 的 critic,
-        # 契约是 {"passed", "feedback"}(见 stages.py 的 human review checkpoint)。
-        return {"passed": True, "feedback": ""}
+        # confirm_outline / chapter_pause 是各自 Loop body 的最后一关,契约是
+        # {"needs_revision", "feedback"}(见 stages.py 的 human review checkpoint)。
+        return {NEEDS_REVISION_KEY: False, "feedback": ""}
     return request.context or {}
 
 

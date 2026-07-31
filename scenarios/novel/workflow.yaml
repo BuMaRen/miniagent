@@ -20,18 +20,26 @@ stages:
       - character_world_design
     model: claude-sonnet-5
 
-  # outline_review 是一条 ReviewChain([outline_critic, confirm_outline]):
-  # 每轮先过 AI 评审,AI 通过后才轮到人工把关(confirm_outline 是个
-  # Checkpoint,但复用了 critic 的 {"passed", "feedback"} 契约,详见
-  # stages.build_outline_review_chain)。人工不通过时给的 feedback 与 AI 不
-  # 通过时一样驱动 outline_generation 重写,下一轮重新走一遍这整条链——AI 与
-  # 人工都要再看一次,而不是让人工反馈单独绕开 AI 复核再走一条独立循环。
+  # Loop 的一轮就是把 body 依次跑一遍(Sequence 的规则),跑完没人要求重来就算
+  # 通过。continue_when 是一条状态路径("是非器"):每个 body 节点跑完后,引擎读
+  # 它的真假——真则本轮到此为止、从 body[0] 重开一轮。引擎不认识 needs_revision
+  # 这个名字,是这里指给它看的。
+  #
+  # 判定放在每个节点之后(而不是整条 body 跑完之后)带来两件事:
+  #   · 短路:outline_critic 判否时,后面的人工确认 confirm_outline 根本不执行
+  #     ——不必拿一份 AI 都没过的草稿去打扰人。
+  #   · 人工与 AI 平权:confirm_outline 填的 needs_revision 与 AI 的一样驱动下一轮
+  #     从 outline_generation 重写,且下一轮 AI 与人工都要再看一次。
+  # 上一轮为什么没过,由引擎发布在游标 _loop.outline_loop.last 里,
+  # outline_generation 用普通的 reads 读它(见 stages.OUTLINE_LOOP_LAST_PATH)。
   - loop:
       name: outline_loop
-      producer: outline_generation
-      critic: outline_review
-      reviser: outline_generation
-      max_iterations: 3
+      continue_when: _loop.outline_loop.last.needs_revision
+      max_iterations: 4
+      body:
+        - outline_generation
+        - outline_critic
+        - confirm_outline
       on_exceed: escalate_to_checkpoint
 
   - foreach:
@@ -39,18 +47,21 @@ stages:
       items_path: story_bible.chapters
       body:
         sequence:
-          # chapter_review 同理是 ReviewChain([chapter_critic, chapter_pause]):
-          # AI 审校通过后才请人工确认,人工反馈驱动 chapter_revision 就地重写
-          # 本章,下一轮重新过一遍 AI + 人工。
+          # 与 outline_loop 同构:AI 审校通过后才轮到人工确认,人工反馈同样驱动
+          # chapter_drafting 就地重写本章(撰写与修订本就是同一件事、同一套约束,
+          # 所以不需要单独的 reviser 节点)。
           - loop:
               name: chapter_review_loop
-              producer: chapter_drafting
-              critic: chapter_review
-              reviser: chapter_revision
-              max_iterations: 3
+              continue_when: _loop.chapter_review_loop.last.needs_revision
+              max_iterations: 4
+              body:
+                - chapter_drafting
+                - chapter_critic
+                - chapter_pause
               on_exceed: escalate_to_checkpoint
           # 只有这个 Loop 整体通过(AI 与人工都点头)才会走到这一步,
-          # 把该章 status 推进到 "reviewed"。
+          # 把该章 status 推进到 "reviewed"。它同时能从 Loop 输出的 _loop
+          # 记账里看出这一章是"真通过"还是"跑满轮次后被裁决放行"的。
           - chapter_finalize
 
   - sequence:

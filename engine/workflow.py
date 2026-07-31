@@ -210,14 +210,26 @@ class Workflow:
     def _build_loop(cls, body: Any, registry: "NodeRegistry", path: str) -> Loop:
         if not isinstance(body, dict):
             raise ValueError(f"loop @ {path} 的值须为 dict,得到: {body!r}")
-        for key in ("producer", "critic", "reviser"):
+        for key in ("body", "continue_when"):
             if key not in body:
                 raise ValueError(f"loop @ {path} 缺少必填字段 {key!r}")
+        if not isinstance(body["body"], list):
+            raise ValueError(
+                f"loop @ {path} 的 body 须为节点列表(一轮依次执行它们),得到: {body['body']!r}"
+            )
+        # continue_when 是一条状态路径(是非器),不是节点——不进 registry 查找,
+        # 原样交给 Loop 在运行期 ctx.state.get 取真假。
+        if not isinstance(body["continue_when"], str):
+            raise ValueError(
+                f"loop @ {path} 的 continue_when 须为状态路径(str),得到: {body['continue_when']!r}"
+            )
         kwargs: dict[str, Any] = {
             "name": body.get("name", f"loop_{path}"),
-            "producer": cls._build_node(body["producer"], registry, f"{path}_producer"),
-            "critic": cls._build_node(body["critic"], registry, f"{path}_critic"),
-            "reviser": cls._build_node(body["reviser"], registry, f"{path}_reviser"),
+            "body": [
+                cls._build_node(child, registry, f"{path}_body_{i}")
+                for i, child in enumerate(body["body"])
+            ],
+            "continue_when": body["continue_when"],
         }
         if "max_iterations" in body:
             kwargs["max_iterations"] = body["max_iterations"]
@@ -307,9 +319,10 @@ class Workflow:
             for child in body:
                 cls._resolve_node_model(child, model, result)
         elif kind == "loop" and isinstance(body, dict):
-            for key in ("producer", "critic", "reviser"):
-                if key in body:
-                    cls._resolve_node_model(body[key], model, result)
+            # 与 sequence 同构:loop 的 body 也是一串节点(continue_when 是状态路径,
+            # 不是节点,不参与 model 继承)。
+            for child in body.get("body") or []:
+                cls._resolve_node_model(child, model, result)
         elif kind == "foreach" and isinstance(body, dict):
             if "body" in body:
                 cls._resolve_node_model(body["body"], model, result)

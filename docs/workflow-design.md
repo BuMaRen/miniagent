@@ -130,11 +130,11 @@ state_schema: story-bible-schema.md
 stages:
   - sequence: [input_parsing, concept_expansion, character_world_design]
 
-  - loop:                      # 3.4 + 3.5;critic 是一条链,见 §5
-      producer: outline_generation
-      critic: outline_review     # ReviewChain([outline_critic, confirm_outline])
-      reviser: outline_generation
-      max_iterations: 3
+  - loop:                      # 3.4 + 3.5;body 里 AI 与人工两道关卡,见 §5
+      name: outline_loop
+      continue_when: _loop.outline_loop.last.needs_revision
+      max_iterations: 4
+      body: [outline_generation, outline_critic, confirm_outline]
       on_exceed: escalate_to_checkpoint
 
   - foreach:                   # 3.6 + 3.8,对每一章;当前章大纲每轮发布到游标 item_path
@@ -142,10 +142,10 @@ stages:
       body:                     # 连贯性靠 body 的 reads 读故事圣经/滚动摘要,不靠 ForEach 喂前文
         sequence:
           - loop:
-              producer: chapter_drafting
-              critic: chapter_review   # ReviewChain([chapter_critic, chapter_pause])
-              reviser: chapter_revision
-              max_iterations: 3
+              name: chapter_review_loop
+              continue_when: _loop.chapter_review_loop.last.needs_revision
+              max_iterations: 4
+              body: [chapter_drafting, chapter_critic, chapter_pause]
               on_exceed: escalate_to_checkpoint
           - chapter_finalize    # 整个 Loop(AI + 人工都通过)后,才把 status 推进到 reviewed
 
@@ -160,7 +160,7 @@ stages:
 | concept_expansion | 3.2 | Sequence | `concept_toolset` |
 | character_world_design | 3.3 | Sequence | `character_design_toolset`(含写入故事圣经的工具) |
 | outline_generation / outline_critic | 3.4 / 3.5 | Loop | `outline_toolset`、`outline_critique_toolset` |
-| chapter_drafting / chapter_critic / chapter_revision | 3.6 / 3.8 | ForEach(Loop) | `chapter_writing_toolset`、`consistency_check_toolset`(读故事圣经做矛盾检测)、`prose_revision_toolset` |
+| chapter_drafting / chapter_critic | 3.6 / 3.8 | ForEach(Loop) | `chapter_writing_toolset`、`consistency_check_toolset`(读故事圣经做矛盾检测) |
 | manuscript_assembly_polish | 3.9 | Sequence | `global_polish_toolset`、`foreshadowing_audit_toolset` |
 | final_qa | 3.10 | Sequence | `qa_toolset` |
 
@@ -168,35 +168,38 @@ stages:
 
 ## 5. Checkpoint 配置(可选,建议)
 
-`confirm_outline` 与 `chapter_pause` 不是裸的 `checkpoint:` 节点,而是分别和
-`outline_critic`/`chapter_critic` 一起,被 `ReviewChain`(场景自定义的 Node,见
-framework-design.md §6.5 与 `scenarios/novel/review_chain.py`)串成
-`outline_review` / `chapter_review` 这两条链,直接挂在各自 `Loop` 的 `critic`
-槽位上。这样设计而不是"AI critic loop 通过后,再单独套一层人工 Loop",是因为
-后者会让"人工反馈驱动的重写"绕开 AI 复核——人工提了修改意见、Reviser 改完,
-下一轮只有人工再看一遍,没人再替他把一次逻辑硬伤的关。串成一条链就没有这个
-问题:每一轮都是先过 AI、AI 通过了才轮到人工,人工不通过一样触发 Reviser
-重写,下一轮重新走一遍这整条链。
+`confirm_outline` 与 `chapter_pause` 不是独立的、跟在 Loop 后面的 `checkpoint:`
+节点,而是各自 `Loop` 的 `body` 里的**最后一关**,排在 AI critic 之后。这样设计
+而不是"AI critic loop 通过后,再单独套一层人工 Loop",是因为后者会让"人工反馈
+驱动的重写"绕开 AI 复核——人工提了修改意见、生成节点改完,下一轮只有人工再看
+一遍,没人再替他把一次逻辑硬伤的关。放进同一条 `body` 就没有这个问题:每一轮都
+是先过 AI、AI 通过了才轮到人工,人工不通过一样重开一轮,下一轮 AI 与人工都要
+再看一次。
 
-这依赖两个事实:① `Checkpoint.run()` 的返回值(流入的 `inputs` 与人工
-`resume_input` 合并)天然是 Loop critic 契约 `{"passed": bool, "feedback": str}`
-的超集,只要 `resume_input_schema` 声明成这个形状即可;② `ReviewChain` 本身
-也满足这个契约,可以直接塞进 Loop 的 `critic`。两者叠加,人工审阅就成了"多一道
-关卡"而不是"多一条独立流程"——engine 侧不需要为此新增任何原语(见
-`scenarios/novel/stages.py` 的 `build_outline_review_chain` /
-`build_chapter_review_chain`)。
+这依赖两个事实:① `Loop` 的判定发生在**每个 body 节点之后**而不是整条 body
+之后,所以 AI critic 判否时后面的人工确认根本不会执行——不必拿一份 AI 都没过的
+草稿去打扰人;② `Checkpoint.run()` 的返回值(流入的 `inputs` 与人工
+`resume_input` 合并)天然是评审契约 `{"needs_revision": bool, "feedback": str}`
+的超集,只要 `resume_input_schema` 声明成这个形状即可。两者叠加,人工审阅就成了
+"body 里多列一项"而不是"多一条独立流程"——engine 与场景侧都不需要为此新增任何
+节点类型(见 `scenarios/novel/stages.py` 的
+`build_outline_human_review_checkpoint` / `build_chapter_human_review_checkpoint`)。
+
+注意判定字段叫 `needs_revision` 而不是 `passed`:`continue_when` 是一条裸状态
+路径、引擎只取它的真假,没有取反的余地,所以字段必须朝着"还要再改一轮"为真去
+命名(见 framework-design.md §6.2)。
 
 - **`confirm_outline`**(强烈建议保留):大纲经 AI 评审通过后,给用户一次确认/
-  调整机会。人工回复 `passed: false` 并给出 `feedback` 时,与 AI critic 不通过
-  走的是同一条路径——`outline_generation` 重写,下一轮重新过一遍 AI + 人工,
-  直到人工通过或达到 `max_iterations`(此时走 `on_exceed` 的兜底策略)——这是
+  调整机会。人工回复 `needs_revision: true` 并给出 `feedback` 时,与 AI critic
+  判否走的是同一条路径——`outline_generation` 重写,下一轮重新过一遍 AI + 人工,
+  直到人工放行或跑满 `max_iterations`(此时走 `on_exceed` 的兜底策略)——这是
   全流程中改动成本最低的节点。
 - **`chapter_pause`**:每章通过 AI 审校后,给用户一次逐章确认的机会,人工反馈
-  同样驱动 `chapter_revision` 就地重写本章;只有整条链(AI + 人工)都通过,
-  `chapter_finalize` 才会把该章 `status` 推进到 `reviewed`——不存在"先标记完成
-  再返工"的情况。
-- **其他阶段性审阅点**(可选):同样的"评审链里塞一个 Checkpoint"手法可以
-  套用到任何一个已有 Loop 上,不局限于这两处。
+  同样驱动 `chapter_drafting` 就地重写本章(撰写与修订本就是同一个节点:游标为
+  空是撰写,游标里带着上一轮的意见就是修订);只有整条 `body`(AI + 人工)都
+  通过,`chapter_finalize` 才会把该章 `status` 推进到 `reviewed`。
+- **其他阶段性审阅点**(可选):同样的"往 body 末尾加一关"的手法可以套用到任何
+  一个已有 Loop 上,不局限于这两处。
 
 ## 6. 开放问题 / 后续迭代方向
 

@@ -53,7 +53,7 @@ flowchart TD
 
 - 流程结构见 [docs/workflow-design.md](../docs/workflow-design.md) §4 的 Workflow 定义。
 - 大纲评审、章节审校 = 同一个 `Loop` 原语的两次实例化。
-- 逐章撰写 = `ForEach(chapters, body=Loop(draft, critic, revise))`。
+- 逐章撰写 = `ForEach(chapters, body=Loop(body=[draft, critic, human_gate]))`。
 - 故事圣经 = `StateSchema` 的一个实例。
 
 ## 关键点

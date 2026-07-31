@@ -2,10 +2,9 @@
 这条接线的单测(见 engine.workflow.Workflow.resolve_stage_models 与
 scenarios.novel.workflow.build_workflow)。
 
-重点验证:outline_critic/chapter_critic 这两个 Stage 在 workflow.yaml 里从不以
-自己的名字出现——它们被包进 ReviewChain,注册与被引用的都是 "outline_review"/
-"chapter_review" 这个复合名字——client_factory 收到的仍应是 stage_models 里以
-复合名字为键解析出的那个 model,而不是 None。
+现在每个节点在 workflow.yaml 里都以自己的名字出现(评审的"多道关卡"是 Loop 的
+body 直接列出来的,不再包进场景侧的组合节点),所以 stage_models 的键和
+client_factory 查的名字天然一致,不需要任何换名——这里就是把这件事钉住。
 """
 
 import unittest
@@ -36,13 +35,13 @@ class BuildNodeRegistryStageModelsTests(unittest.TestCase):
         self.assertEqual(calls["outline_generation"], "claude-sonnet-5")
         self.assertIsNone(calls["character_world_design"])
 
-    def test_outline_and_chapter_critic_resolve_via_composite_review_chain_name(self):
+    def test_critics_resolve_under_their_own_names(self):
         factory, calls = self._factory_and_calls()
         build_node_registry(
             factory,
             stage_models={
-                "outline_review": "claude-sonnet-5",
-                "chapter_review": "claude-haiku-4-5",
+                "outline_critic": "claude-sonnet-5",
+                "chapter_critic": "claude-haiku-4-5",
             },
         )
         self.assertEqual(calls["outline_critic"], "claude-sonnet-5")

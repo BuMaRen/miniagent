@@ -4,7 +4,7 @@
 因此可以任意嵌套(例如 ForEach 的 body 是一个 Loop)。它们全部场景无关。
 
     Sequence   —— 顺序执行子节点
-    Loop       —— Critic-Reviser 循环:生成->评审->修订->直到达标或超限
+    Loop       —— 迭代:反复跑一串节点,直到判定不再要求重来或超限
     ForEach    —— 对列表中每个元素重复执行子流程
     Checkpoint —— 暂停等待外部(人工)输入的断点
 """

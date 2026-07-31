@@ -5,10 +5,14 @@
 结构核对)是纯粹的确定性计算,用普通函数当 executor 更可靠也更省成本;这正是
 docs/framework-design.md §3.2 强调的"Stage 不关心怎么产出输出"的体现。
 
-本模块产出的也不全是 Stage:人工复核点是 Checkpoint(引擎原语),两条评审链是
-ReviewChain(本场景自定义的 Node,见 review_chain.py)。它们和 Stage 一起被登记
-进同一张 NodeRegistry、在 workflow.yaml 里以同样的方式按名引用——因为引擎要求的
-从来只是 Node 协议,而不是 Stage 这个具体类型。
+本模块产出的也不全是 Stage:人工复核点是 Checkpoint(引擎原语)。它们和 Stage
+一起被登记进同一张 NodeRegistry、在 workflow.yaml 里以同样的方式按名引用——因为
+引擎要求的从来只是 Node 协议,而不是 Stage 这个具体类型。
+
+评审的"多道关卡"不需要场景侧再写一个组合节点:Loop 的一轮本身就是一串节点依次
+执行,判定又发生在每个节点之后(见 engine/primitives/loop.py),所以
+`body: [生成, AI 评审, 人工确认]` 天然就是"AI 先挡掉明显问题、通过后才让人工把关",
+且 AI 判否时人工那一关根本不执行。
 
 风格基调统一交给 _STYLE_GUIDE:现代人穿越西汉、随张骞出使西域这个题材最容易
 写成"金手指爽文",这里明确要求现实主义——身体的脆弱、制度的压迫感、信息不
@@ -23,7 +27,6 @@ from agent.agent import Agent
 from agent.memory import ConversationMemory
 from engine.context import RunContext
 from engine.primitives.checkpoint import Checkpoint
-from scenarios.novel.review_chain import ReviewChain
 from engine.stage import Node, Stage
 from llm.client import LLMClient
 from state.schema import StateSchema
@@ -69,6 +72,18 @@ _JSON_ONLY = (
     "不要用 Markdown 代码块包裹。JSON 的顶层键名必须与下面列出的完全一致"
     "(包括其中的点号),不要嵌套在别的键下面。"
 )
+
+# Loop 的游标:引擎把"上一个跑完的 body 节点的产出"整块发布在这条状态路径上
+# (见 engine/primitives/loop.py),形如 f"_loop.{loop 的 name}.last"。它是"上一轮
+# 为什么没过"的唯一通道 —— 本轮第一个节点用普通的 reads 读它,而不是靠 Loop 把
+# feedback 塞进 inputs。这里的名字必须和 workflow.yaml 里各 loop 的 name 对得上。
+OUTLINE_LOOP_LAST_PATH = "_loop.outline_loop.last"
+CHAPTER_REVIEW_LOOP_LAST_PATH = "_loop.chapter_review_loop.last"
+
+# 评审类节点(AI critic 与人工 Checkpoint)约定输出的判定字段名。极性刻意朝着
+# "还要再改一轮"为真:workflow.yaml 里的 continue_when 是一条裸状态路径、引擎只
+# 取它的真假,没有取反的余地(取反就得引入表达式语言,见 loop.py 的说明)。
+NEEDS_REVISION_KEY = "needs_revision"
 
 
 def _make_agent(
@@ -219,14 +234,18 @@ def build_character_world_design_stage(client: LLMClient) -> Stage:
 
 
 # ---------------------------------------------------------------------------
-# 3.4 / 3.5 大纲生成与大纲评审(Loop 的 producer/reviser 与 critic)
+# 3.4 / 3.5 大纲生成与大纲评审(outline_loop 的 body 前两关)
+#
+# 生成与修订是同一件事、同一套约束、同一个输出契约,所以只需要一个节点:第一轮
+# 游标是空的就是"生成",后续轮次游标里带着上一轮的评审意见就是"修订"。
 # ---------------------------------------------------------------------------
 
 _OUTLINE_PROMPT = f"""你负责小说创作流程中的"大纲与节拍生成"阶段。
 {_STYLE_GUIDE}
 输入包含 story_bible.meta、story_bible.characters、story_bible.world。
-如果 inputs 里还带着 feedback 字段,说明这是一次修订:请针对 feedback
-指出的问题修改大纲,而不是推倒重写。
+输入的 state 里如果 "{OUTLINE_LOOP_LAST_PATH}" 非空、且其中带有非空的 feedback,
+说明这是一次修订,那条 feedback 就是上一轮评审驳回本大纲的理由:请针对它指出的
+问题修改大纲,而不是推倒重写。
 
 你的任务:按 meta.structure_template 生成章节列表,中短篇建议 6-15 章,
 单章 1000-2500 字;每章包含 index/title/beat_summary(该章目标、关键事件、
@@ -261,7 +280,12 @@ def build_outline_generation_stage(client: LLMClient) -> Stage:
     return Stage(
         name="outline_generation",
         executor=agent.run,
-        reads=["story_bible.meta", "story_bible.characters", "story_bible.world"],
+        reads=[
+            OUTLINE_LOOP_LAST_PATH,
+            "story_bible.meta",
+            "story_bible.characters",
+            "story_bible.world",
+        ],
         writes=["story_bible.chapters", "story_bible.foreshadowing"],
         output_schema=OUTLINE_GENERATION_OUTPUT_SCHEMA,
     )
@@ -280,12 +304,16 @@ story_bible.meta / story_bible.characters 供你核对呼应关系。
   在后续任何章节的 beat_summary 里被提及)。
 
 {_JSON_ONLY}
-输出格式:{{"passed": true 或 false, "feedback": "若 passed 为 false,给出具体、
-可执行的修改意见;若为 true,可留空字符串"}}
+输出格式:{{"{NEEDS_REVISION_KEY}": true 或 false, "feedback": "若
+{NEEDS_REVISION_KEY} 为 true,给出具体、可执行的修改意见;若为 false,可留空字符串"}}
+注意 {NEEDS_REVISION_KEY} 的含义是"还需要再改一轮":大纲合格请填 false,
+不合格请填 true。
 """
 
 
-CRITIC_OUTPUT_SCHEMA = StateSchema("critic_output", {"passed": bool, "feedback": str})
+CRITIC_OUTPUT_SCHEMA = StateSchema(
+    "critic_output", {NEEDS_REVISION_KEY: bool, "feedback": str}
+)
 
 
 def build_outline_critic_stage(client: LLMClient) -> Stage:
@@ -299,12 +327,11 @@ def build_outline_critic_stage(client: LLMClient) -> Stage:
 
 
 # ---------------------------------------------------------------------------
-# 3.5.1 大纲人工复核 —— 和 outline_critic 一起串成 ReviewChain,挂进 outline_loop
-# 的 critic 槽位:AI 通过后才轮到人工把关,人工不通过时填写的 feedback 与 AI 不
-# 通过时一样驱动 outline_generation 重写,下一轮重新走一遍 AI critic + 人工这整
-# 条链,而不是只把人工反馈单独拎出去、绕开 AI 复核再走一条独立循环。engine 侧
-# 无需为此新增任何原语——这正是 Checkpoint.run() 返回值(inputs 与 resume_input
-# 合并)天然是 critic 契约超集、又能被本场景自定义的 ReviewChain 串联的结果。
+# 3.5.1 大纲人工复核 —— outline_loop 的 body 最后一关:AI 通过后才轮到人工把关
+# (AI 判否时 Loop 已经短路,这一关不会执行),人工填写的 needs_revision/feedback
+# 与 AI 的完全平权,一样驱动下一轮从 outline_generation 重写、且下一轮 AI 与人工
+# 都要再看一次。engine 侧不需要任何新原语,也不需要场景侧的组合节点——
+# Checkpoint.run() 的返回值(inputs 与 resume_input 合并)本来就满足这个契约。
 # ---------------------------------------------------------------------------
 
 
@@ -316,15 +343,11 @@ def build_outline_human_review_checkpoint() -> Checkpoint:
     )
 
 
-def build_outline_review_chain(client: LLMClient) -> ReviewChain:
-    return ReviewChain(
-        name="outline_review",
-        critics=[build_outline_critic_stage(client), build_outline_human_review_checkpoint()],
-    )
-
-
 # ---------------------------------------------------------------------------
 # 3.6 / 3.8 逐章撰写与章节审校(ForEach(chapters, body=Loop(...)))
+#
+# 和大纲那边一样,撰写与修订是同一个节点:游标为空是撰写,游标里带着上一轮的
+# 评审意见就是修订。
 # ---------------------------------------------------------------------------
 
 CHAPTER_LOOP_ITEM_PATH = "_foreach.chapter_loop.item"
@@ -335,8 +358,9 @@ _CHAPTER_DRAFTING_PROMPT = f"""你负责小说创作流程中的"逐章撰写"�
 (index/title/beat_summary),"story_bible.chapters" 是全部章节列表(其中下标
 更早的章节可能已经有定稿的 draft_summary/text,供你保持衔接;当前章节与之后
 的章节仍是占位)。characters/world/foreshadowing 是需要保持一致的既有事实。
-如果 inputs 里带着 feedback 字段,说明这是一次修订:请只按 feedback 修改
-被指出的问题,不要整章推倒重写。
+输入的 state 里如果 "{CHAPTER_REVIEW_LOOP_LAST_PATH}" 非空、且其中带有非空的
+feedback,说明这是一次修订,那条 feedback 就是上一轮审校驳回本章的理由:请只按它
+指出的问题修改,不要整章推倒重写。
 
 【句式与节奏】不要通篇用主谓宾短句一句一段地平铺直叙——"我睁开眼。""他问。"
 "我说不出话。"这种一行一句、靠动词硬推进度的写法,只能偶尔用在需要"顿"一下
@@ -379,6 +403,7 @@ def build_chapter_drafting_stage(client: LLMClient) -> Stage:
         name="chapter_drafting",
         executor=agent.run,
         reads=[
+            CHAPTER_REVIEW_LOOP_LAST_PATH,
             CHAPTER_LOOP_ITEM_PATH,
             "story_bible.meta",
             "story_bible.characters",
@@ -400,14 +425,17 @@ foreshadowing 供你核对矛盾。
 - 一致性:是否与既有人物设定、已确立的时间线/事件矛盾。
 - 人物:言行是否符合角色设定与当前弧光阶段。
 - 节奏与文笔:是否拖沓/仓促,是否有明显 AI 痕迹(套话、重复句式、空洞形容
-  词堆砌),是否偷偷违反了"现实主义、无金手指"的风格要求;是否通篇短句
-  一句一段地堆砌、缺少带环境/氛围/心理描写的长句(短句只能用于关键的
+  词堆砌、超短句拼凑的短句或段落),是否偷偷违反了"现实主义、无金手指"的风格要求;
+  是否通篇短句一句一段地堆砌、缺少带环境/氛围/心理描写的长句(短句只能用于关键的
   "顿"点,不能是整章默认节奏)——如果存在,视为不通过,并在 feedback 里
   指出具体段落。
 
 {_JSON_ONLY}
-输出格式:{{"passed": true 或 false, "feedback": "若 passed 为 false,给出具体、
-指向被指出片段的修改意见;若为 true,可留空字符串"}}
+输出格式:{{"{NEEDS_REVISION_KEY}": true 或 false, "feedback": "若
+{NEEDS_REVISION_KEY} 为 true,给出具体、指向被指出片段的修改意见;若为 false,
+可留空字符串"}}
+注意 {NEEDS_REVISION_KEY} 的含义是"本章还需要再改一轮":审校通过请填 false,
+不通过请填 true。
 """
 
 
@@ -415,7 +443,7 @@ def _set_chapter_status(ctx: RunContext, chapter_index: Any, status: str) -> Non
     """把 story_bible.chapters 中下标为 chapter_index 的那一条 status 改写为 status。
 
     直接经 ctx.state 读写,不走 Stage 的声明式 writes——调用方(chapter_critic /
-    chapter_pause)本身的输出契约是 critic 的 {passed, feedback},容不下额外的
+    chapter_pause)本身的输出契约是评审的 {needs_revision, feedback},容不下额外的
     story_bible.chapters 字段,只能以 Node 协议允许的"直接读写 ctx.state"来完成
     这个旁路的状态推进,见 build_chapter_critic_stage / build_chapter_human_review_checkpoint。
     """
@@ -442,7 +470,7 @@ def build_chapter_critic_stage(client: LLMClient) -> Stage:
         # 乐观地先标 "reviewed" 保证了"卡在断点"不等于"永远卡在 drafted";
         # 人工真的给出不通过意见时,由 chapter_pause 自己把它打回 "drafted"
         # (build_chapter_human_review_checkpoint)。
-        if verdict.get("passed"):
+        if not verdict.get(NEEDS_REVISION_KEY):
             _set_chapter_status(ctx, inputs.get("chapter_index"), "reviewed")
         return verdict
 
@@ -459,38 +487,11 @@ def build_chapter_critic_stage(client: LLMClient) -> Stage:
     )
 
 
-_CHAPTER_REVISION_PROMPT = _CHAPTER_DRAFTING_PROMPT  # 修订与撰写共用同一套约束与输出契约。
-
-
-def build_chapter_revision_stage(client: LLMClient) -> Stage:
-    agent = _make_agent(
-        client,
-        _CHAPTER_REVISION_PROMPT,
-        toolsets=(RESEARCH_TOOLSET,),
-        output_schema=CHAPTER_DRAFTING_OUTPUT_SCHEMA,
-    )
-    return Stage(
-        name="chapter_revision",
-        executor=agent.run,
-        reads=[
-            CHAPTER_LOOP_ITEM_PATH,
-            "story_bible.meta",
-            "story_bible.characters",
-            "story_bible.world",
-            "story_bible.foreshadowing",
-            "story_bible.chapters",
-        ],
-        writes=["story_bible.chapters"],
-        output_schema=CHAPTER_DRAFTING_OUTPUT_SCHEMA,
-    )
-
-
 # ---------------------------------------------------------------------------
-# 3.8.0.1 章节人工复核 —— 与 build_outline_review_chain 同样的手法:和
-# chapter_critic 串成 ReviewChain 挂进 chapter_review_loop 的 critic 槽位,
-# AI 评审通过后才轮到人工把关;人工的 feedback 与 AI 不通过时一样驱动
-# chapter_revision 重写本章,下一轮重新走一遍 AI + 人工这整条链,而不是等
-# 这一章被判定完成、状态推进到 "reviewed" 之后才发现要返工。
+# 3.8.0.1 章节人工复核 —— 与大纲那边同样的手法:作为 chapter_review_loop 的 body
+# 最后一关,AI 审校通过后才轮到人工把关(AI 判否时 Loop 已短路,这一关不执行);
+# 人工的 needs_revision/feedback 与 AI 的平权,一样驱动下一轮 chapter_drafting
+# 就地重写本章,而不是等这一章被判定完成、状态推进到 "reviewed" 之后才发现要返工。
 # ---------------------------------------------------------------------------
 
 
@@ -500,10 +501,10 @@ class _ChapterHumanReviewCheckpoint:
     通过、或尚未决定就暂停(见 run.py 的 "q" 分支)时都保留 "reviewed"——
     "暂停"不代表"不通过",不该把还没被人工否决的章节退回 drafted。
 
-    仍然是名副其实的 Node(name + run),可以像原生 Checkpoint 一样直接塞进
-    ReviewChain.critics;暂停/恢复的机制(ctx.resume 认领、CheckpointPause)
-    完全委托给内部持有的这个真正的 engine Checkpoint,这里只在其返回之后补一刀
-    状态写回,不侵入引擎的暂停语义。
+    仍然是名副其实的 Node(name + run),可以像原生 Checkpoint 一样直接放进 Loop
+    的 body;暂停/恢复的机制(ctx.resume 认领、CheckpointPause)完全委托给内部
+    持有的这个真正的 engine Checkpoint,这里只在其返回之后补一刀状态写回,
+    不侵入引擎的暂停语义。
     """
 
     def __init__(self, checkpoint: Checkpoint) -> None:
@@ -512,7 +513,7 @@ class _ChapterHumanReviewCheckpoint:
 
     def run(self, ctx: RunContext, inputs: dict[str, Any]) -> dict[str, Any]:
         result = self._checkpoint.run(ctx, inputs)
-        if not result.get("passed"):
+        if result.get(NEEDS_REVISION_KEY):
             _set_chapter_status(ctx, result.get("chapter_index"), "drafted")
         return result
 
@@ -526,21 +527,16 @@ def build_chapter_human_review_checkpoint() -> Node:
     return _ChapterHumanReviewCheckpoint(checkpoint)
 
 
-def build_chapter_review_chain(client: LLMClient) -> ReviewChain:
-    return ReviewChain(
-        name="chapter_review",
-        critics=[build_chapter_critic_stage(client), build_chapter_human_review_checkpoint()],
-    )
-
-
 # ---------------------------------------------------------------------------
 # 3.8.1 章节定稿 —— 兜底把该章 status 推进到 "reviewed"。正常路径下
 # chapter_critic 一过审就已经乐观地把 status 写成 "reviewed"(见
 # build_chapter_critic_stage 顶部的说明),这里再写一遍是幂等的;真正依赖
-# 这一步的是 chapter_review_loop 超过 max_iterations、按
-# on_exceed=escalate_to_checkpoint 升级为人工裁决后"自动接受最后一版"的路径
-# ——那条路径不经过 chapter_critic 的最终通过判定,该章此时仍停在 "drafted",
-# 要靠这里推一把才能继续往下一章走。纯函数 executor,不需要 LLM。
+# 这一步的是 chapter_review_loop 跑满 max_iterations、按
+# on_exceed=escalate_to_checkpoint 升级为人工裁决的路径——那条路径不经过
+# chapter_critic 的最终通过判定,该章此时仍停在 "drafted",要靠这里推一把才能
+# 继续往下一章走。它走的是哪条路径可以从 inputs["_loop"]["exhausted"] 看出来
+# (Loop 的返回值,见 engine/primitives/loop.py);两条路径都该定稿,所以这里
+# 不必分支。纯函数 executor,不需要 LLM。
 # ---------------------------------------------------------------------------
 
 
@@ -652,9 +648,9 @@ def build_final_qa_stage() -> Stage:
 # 组装:把以上节点注册进 NodeRegistry,供 workflow.py 的 from_spec 按名引用。
 #
 # 注意登记表收的是 **Node 而非 Stage**:下面既有 Stage(叶子,真正产出内容),
-# 也有 Checkpoint(引擎原语)和 ReviewChain(本场景自定义的组合节点)。三者
-# 唯一的共同点就是都满足 Node 协议——workflow.yaml 里按名引用它们时,也完全
-# 看不出彼此的区别。这正是 Node 被抽象成 Protocol 的意义所在。
+# 也有 Checkpoint(引擎原语)和包了一层状态写回的 Checkpoint。它们唯一的共同点
+# 就是都满足 Node 协议——workflow.yaml 里按名引用它们时,也完全看不出彼此的区别。
+# 这正是 Node 被抽象成 Protocol 的意义所在。
 # ---------------------------------------------------------------------------
 
 STAGE_NAMES_NEEDING_LLM = (
@@ -664,7 +660,6 @@ STAGE_NAMES_NEEDING_LLM = (
     "outline_critic",
     "chapter_drafting",
     "chapter_critic",
-    "chapter_revision",
     "manuscript_assembly_polish",
 )
 
@@ -672,7 +667,7 @@ STAGE_NAMES_NEEDING_LLM = (
 def build_node_registry(
     client_factory: ClientFactory, stage_models: dict[str, str] | None = None
 ):
-    """组装本场景全部节点(Stage / Checkpoint / ReviewChain),注册进一个新的 NodeRegistry。
+    """组装本场景全部节点(Stage / Checkpoint),注册进一个新的 NodeRegistry。
 
     Args:
         client_factory: 按 (节点名, model) 取一个 LLMClient 的工厂函数。真实运行
@@ -688,15 +683,10 @@ def build_node_registry(
 
     stage_models = stage_models or {}
 
-    def client_for(stage_name: str, model_key: str | None = None) -> LLMClient:
-        # model_key 存在,是因为 outline_critic/chapter_critic 这两个 Stage 在
-        # workflow.yaml 里从来不以自己的名字出现——它们被包进 ReviewChain,注册
-        # 进 registry、供 loop 的 critic 槽位引用的是 "outline_review"/
-        # "chapter_review" 这个复合名字(见下方两处调用)。resolve_stage_models
-        # 是照着 workflow.yaml 的树形结构解析的,记的是树上出现的名字,所以这里
-        # 查 stage_models 时必须换回那个复合名字,而不是 client_factory 看到的
-        # 内部 Stage 名。其余 Stage 两个名字本来就一致,不传 model_key 即可。
-        return client_factory(stage_name, stage_models.get(model_key or stage_name))
+    def client_for(stage_name: str) -> LLMClient:
+        # 每个节点在 workflow.yaml 里都以自己的名字出现,所以 resolve_stage_models
+        # 记下的名字和这里查的名字天然一致,不需要任何换名。
+        return client_factory(stage_name, stage_models.get(stage_name))
 
     registry = NodeRegistry()
     registry.register(build_input_parsing_stage())
@@ -705,14 +695,11 @@ def build_node_registry(
         build_character_world_design_stage(client_for("character_world_design"))
     )
     registry.register(build_outline_generation_stage(client_for("outline_generation")))
-    registry.register(
-        build_outline_review_chain(client_for("outline_critic", model_key="outline_review"))
-    )
+    registry.register(build_outline_critic_stage(client_for("outline_critic")))
+    registry.register(build_outline_human_review_checkpoint())
     registry.register(build_chapter_drafting_stage(client_for("chapter_drafting")))
-    registry.register(
-        build_chapter_review_chain(client_for("chapter_critic", model_key="chapter_review"))
-    )
-    registry.register(build_chapter_revision_stage(client_for("chapter_revision")))
+    registry.register(build_chapter_critic_stage(client_for("chapter_critic")))
+    registry.register(build_chapter_human_review_checkpoint())
     registry.register(build_chapter_finalize_stage())
     registry.register(
         build_manuscript_assembly_polish_stage(client_for("manuscript_assembly_polish"))
@@ -725,5 +712,8 @@ __all__ = [
     "STORY_BIBLE_SCHEMA",
     "ClientFactory",
     "CHAPTER_LOOP_ITEM_PATH",
+    "CHAPTER_REVIEW_LOOP_LAST_PATH",
+    "NEEDS_REVISION_KEY",
+    "OUTLINE_LOOP_LAST_PATH",
     "build_node_registry",
 ]

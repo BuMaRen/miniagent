@@ -159,10 +159,30 @@ class FromSpecTests(unittest.TestCase):
         seq = wf.nodes[0]
         self.assertEqual(len(seq.nodes), 2)
 
-    def test_loop_keyword_requires_producer_critic_reviser(self):
+    def test_loop_keyword_requires_body_and_continue_when(self):
         with self.assertRaises(ValueError):
             Workflow.from_spec(
-                {"workflow": "wf", "stages": [{"loop": {"producer": "outline"}}]},
+                {"workflow": "wf", "stages": [{"loop": {"body": ["outline"]}}]},
+                self.registry,
+            )
+
+    def test_loop_body_must_be_a_list(self):
+        with self.assertRaises(ValueError):
+            Workflow.from_spec(
+                {
+                    "workflow": "wf",
+                    "stages": [{"loop": {"body": "outline", "continue_when": "x.y"}}],
+                },
+                self.registry,
+            )
+
+    def test_loop_continue_when_must_be_a_state_path(self):
+        with self.assertRaises(ValueError):
+            Workflow.from_spec(
+                {
+                    "workflow": "wf",
+                    "stages": [{"loop": {"body": ["outline"], "continue_when": ["x"]}}],
+                },
                 self.registry,
             )
 
@@ -173,9 +193,9 @@ class FromSpecTests(unittest.TestCase):
                 "stages": [
                     {
                         "loop": {
-                            "producer": "outline",
-                            "critic": "critic",
-                            "reviser": "reviser",
+                            "name": "review",
+                            "body": ["outline", "critic", "reviser"],
+                            "continue_when": "_loop.review.last.needs_revision",
                             "max_iterations": 5,
                             "on_exceed": "raise",
                         }
@@ -185,6 +205,8 @@ class FromSpecTests(unittest.TestCase):
             self.registry,
         )
         loop = wf.nodes[0]
+        self.assertEqual([n.name for n in loop.body], ["outline", "critic", "reviser"])
+        self.assertEqual(loop.continue_when, "_loop.review.last.needs_revision")
         self.assertEqual(loop.max_iterations, 5)
         self.assertEqual(loop.on_exceed, OnExceed.RAISE)
 
@@ -278,12 +300,15 @@ class ResolveStageModelsTests(unittest.TestCase):
             {"outline": "claude-sonnet-5", "critic": "claude-haiku-4-5"},
         )
 
-    def test_model_on_loop_propagates_to_producer_critic_reviser(self):
+    def test_model_on_loop_propagates_into_body(self):
         spec = {
             "workflow": "wf",
             "stages": [
                 {
-                    "loop": {"producer": "outline", "critic": "critic", "reviser": "reviser"},
+                    "loop": {
+                        "body": ["outline", "critic", "reviser"],
+                        "continue_when": "_loop.loop_0.last.needs_revision",
+                    },
                     "model": "claude-sonnet-5",
                 }
             ],
@@ -304,7 +329,12 @@ class ResolveStageModelsTests(unittest.TestCase):
                 {
                     "foreach": {
                         "items_path": "chapters",
-                        "body": {"loop": {"producer": "outline", "critic": "critic", "reviser": "reviser"}},
+                        "body": {
+                            "loop": {
+                                "body": ["outline", "critic", "reviser"],
+                                "continue_when": "_loop.loop_0_body.last.needs_revision",
+                            }
+                        },
                     },
                     "model": "claude-sonnet-5",
                 }

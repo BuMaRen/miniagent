@@ -17,7 +17,7 @@
 | Agent | LLM + ToolRegistry + ToolSets + Memory,Stage 的典型执行体 | 否(结构),ToolSet 决定它做什么 |
 | ToolSet | 一组工具(function + schema),赋予 Agent 特定能力。注意:这是代码装配期显示挂载的工具组,和 Claude/OpenAI 里"运行时由模型自主发现"的 Skill 概念不是一回事(见 §4)| **是** —— 这是场景方二次开发的主要挂载点 |
 | State Store | 通用的结构化共享状态读写接口 | 否(接口);字段语义由场景方提供的 Schema 决定 |
-| Loop(Critic-Reviser) | "生成→评审→修订→直到达标或超限"的通用循环原语 | 否 |
+| Loop(迭代) | "对同一份输入反复跑一串节点,直到某个判定不再要求重来或超限"的通用循环原语 | 否 |
 | ForEach | 对列表中每个元素重复执行子流程 | 否 |
 | Checkpoint | 暂停等待外部(人工)输入的通用断点 | 否(是否设置由场景方决定) |
 | Workflow 定义 | 场景方用上述原语拼出的具体流程 | 是 |
@@ -46,11 +46,11 @@ flowchart TB
 
 **为什么要单独抽象出 Node,而不是只留 Stage?** 因为框架的核心卖点是"少量原语任意嵌套组合",而 Node 正是这一点在类型层面的粘合剂:
 
-- `Loop.producer / critic / reviser` 的类型是 `Node`
+- `Loop.body` 的类型是 `list[Node]`
 - `ForEach.body` 的类型是 `Node`
 - `Sequence.nodes` 的类型是 `list[Node]`
 
-正因为它们只要求"是个 Node",所以 `ForEach` 的 body 可以塞一个 `Loop`、`Loop` 的 producer 可以塞一个 `Stage`——任意层级的嵌套组合才成立。如果没有 Node、这些原语写死"我只能装 Stage",嵌套就没了。
+正因为它们只要求"是个 Node",所以 `ForEach` 的 body 可以塞一个 `Loop`、`Loop` 的 body 里可以混着 `Stage` 和 `Checkpoint`——任意层级的嵌套组合才成立。如果没有 Node、这些原语写死"我只能装 Stage",嵌套就没了。
 
 | | **Node** | **Stage** |
 |---|---|---|
@@ -76,7 +76,9 @@ Stage:                              # 实现 Node 协议
 
 `reads`/`writes` 是声明式的,好处有两个:一是执行时可以只把相关状态切片注入上下文,避免把全量状态都塞给模型;二是这些声明本身可以用来做依赖分析(比如判断哪些 Stage 之间没有状态依赖、理论上可以并行)。
 
-注意 **`writes` 是可选的、默认为空——不是每个 Stage 都会写 State Store。** 数据有两条通道:①上一个节点的 `outputs` 直接作为下一个节点的 `inputs`(揮发,不落 State);②只有 `writes` 声明的切片才写回 State Store。仅当某个事实需要被**非相邻的后段**读取(如故事圣经在角色设计阶段写、逐章撰写/统稿阶段才读),或需要追加历史 / 支持断点恢复时,才写 State。Loop 内 critic 的 `{passed, feedback}` 只被相邻的 reviser 消费,通常走通道①、不落 State。
+注意 **`writes` 是可选的、默认为空——不是每个 Stage 都会写 State Store。** 数据有两条通道:①上一个节点的 `outputs` 直接作为下一个节点的 `inputs`(揮发,不落 State);②只有 `writes` 声明的切片才写回 State Store。仅当某个事实需要被**非相邻的后段**读取(如故事圣经在角色设计阶段写、逐章撰写/统稿阶段才读),或需要追加历史 / 支持断点恢复时,才写 State。
+
+一个例外是 `Loop` 的游标 `_loop.<name>.last`:评审意见要跨**轮次**送到下一轮的第一个节点,通道①(节点间的 outputs->inputs)只在一轮之内有效,所以它由引擎写进 State 的 `_loop.*` 记账命名空间,由下一轮的生成节点用普通 `reads` 读取。手法与 `ForEach` 的 `_foreach.*` 游标一致。
 
 Stage 不关心"怎么产出输出"——它只是一个契约。同一个 Stage 定义换一个 executor(比如换一个挂载了不同 ToolSet 的 Agent),就能在不同场景里做完全不同的事,这是场景可替换性的关键。
 
@@ -114,20 +116,37 @@ StateStore:
 
 `A -> B -> C`,上一个 Stage 的输出流入下一个 Stage 的输入(可能还要经过 State Store 中转)。
 
-### 6.2 Loop(Critic-Reviser 循环)
+### 6.2 Loop(迭代)
 
-通用的"生成 → 评审 → 修订"循环,参数化为:
+**同一份输入,反复尝试到满意为止。** 和 `ForEach` 的分工是:`ForEach` 遍历 N 个不同的元素、由数据耗尽决定停;`Loop` 反复处理同一份数据、由一个判定决定停。和 `Sequence` 的分工只差"跑几次":`Sequence` 跑 1 次,`Loop` 最多跑 `max_iterations` 次。
 
 ```
 Loop:
-  producer: Stage              # 产出待评审内容(首轮)
-  critic: Stage                # 输出 {pass: bool, feedback: str}
-  reviser: Stage                # 依据 feedback 修订 producer 的输出
+  body: list[Node]             # 一轮依次执行它们(Sequence 的规则:上一个 outputs 流入下一个 inputs)
+  continue_when: StatePath     # 是非器——每个 body 节点跑完后取它的真假,真则重开一轮
   max_iterations: int
-  on_exceed: retry_forever_forbidden | escalate_to_checkpoint | accept_last_version
+  on_exceed: raise | escalate_to_checkpoint | accept_last_version
 ```
 
-退出条件由 `critic` 的输出决定,不由引擎假设"什么叫合格"。这个原语在小说场景里被复用了两次(大纲评审、章节审校),这正是它被设计为独立原语而非内置逻辑的原因——写一次,任意层级复用。
+每一轮都从**同一份 inputs** 重新开始,轮次之间不累积。一轮内部每个节点跑完做两件事:
+
+1. 把它的 outputs 整块发布到游标 `_loop.<name>.last`(整块**替换**,不是合并);
+2. 读 `continue_when` 指向的状态路径,真则本轮到此为止、从 `body[0]` 重开一轮。
+
+第 2 条是这个原语唯一的判定机制,刻意做成"读一条状态路径取真假",于是:
+
+- **引擎不认识任何业务字段名。** 没有 `passed` 也没有 `feedback`,判定字段叫什么、由谁产出,全在 `workflow.yaml` 里指给它看。这与 §6.5 的判断标准一致:"什么情况下算合格"是场景的事。
+- **不需要表达式语言,也不需要场景侧的谓词回调。** 真需要复杂判定的场景,就在 `body` 里加一个节点把结果算出来写进 State——计算属于节点,不属于一个特殊槽位。
+- **极性是固定的:真 = 还要再来一轮。** 所以被读的字段要朝着"还得改"为真去命名(如 `needs_revision`)而不是 `passed`——裸路径取真假没有取反的余地,这是刻意的:一旦支持取反就得引入表达式语言。
+- 路径缺失时读到 `None`、判为假,所以 `body` 里不产出判定字段的节点(比如生成节点)不会误触发重开一轮。
+
+第 1 条的游标顺带解决"下一轮怎么知道上一轮为什么没过":`body[0]` 用普通的 `reads=["_loop.<name>.last"]` 就能读到上一个节点的产出(通常正是驳回它的那份评审意见)。整块替换而非合并是正确性要求——否则上一轮的判定字段会残留,是非器读到陈旧的真值就永远重开。循环正常结束时游标被清掉,避免泄漏给后续节点、也避免大对象长期躺在持久化快照里;但 `body` 里的 `Checkpoint` 暂停时**不清**,续跑还要靠它读回意见。
+
+判定放在**每个节点之后**而不是整条 `body` 之后,于是"多道关卡"是白拿的:`body: [生成, AI 评审, 人工确认]` 天然就是"AI 先挡掉明显问题、通过后才让人工把关",且 AI 判否时人工那一关根本不执行(不必拿一份 AI 都没过的草稿去打扰人)。**这是它取代早期那个 `producer/critic/reviser` 三槽位版本的主要理由**:那个版本把三个节点的角色写死在引擎里,而"生成"与"修订"在实践中往往是同一个节点(游标为空就是生成,游标里带着意见就是修订),"评审"又往往不止一关——都是场景自己的编排,不该由原语规定。
+
+返回值是最后一个节点的 outputs,外加一份 `_loop: {name, iterations, exhausted}` 记账,让循环后面的节点能区分"是通过了"还是"跑满轮次被 `on_exceed` 放行的",而不必自己猜。
+
+**本原语不对返回值做任何投影或裁剪**,所以它可能带着一些循环内部的中间字段(典型如最后那一关的判定与评审意见)按通道①流进循环后面的节点。这是刻意不管的:`Loop` 对外的正式接口是"从 `continue_when` 这条状态路径读、往 `_loop.<name>.last` 这条状态路径写",两头都在 State 上;至于要不要把它的 outputs 当作后续节点的 inputs 来用,是场景方在自己的 Workflow 定义里决定的事,而每个节点真正需要什么本来就该由它自己的 `reads` 声明。原语不替场景猜"哪些字段该留、哪些该扔"——那是业务语义,不是控制流形状(§6.5)。
 
 ### 6.3 ForEach(遍历子流程)
 
@@ -163,11 +182,13 @@ Checkpoint:
 
 判断标准很简单:**它描述的是"执行结构长什么样",还是"什么情况下算合格 / 该怎么组织判断"?** 前者才是原语。
 
-需要后者时,场景方**不必也不应该改引擎**:`Node` 是一个 Protocol(结构化类型),只要写一个带 `name` 和 `run(ctx, inputs) -> outputs` 的类,就自动是合法的 Node,可以直接塞进 `Loop` 的任一槽位、`Sequence.nodes`、`ForEach.body`,与内置原语平起平坐——不需要继承任何基类,也不需要在引擎里登记类型。
+需要后者时,场景方**不必也不应该改引擎**:`Node` 是一个 Protocol(结构化类型),只要写一个带 `name` 和 `run(ctx, inputs) -> outputs` 的类,就自动是合法的 Node,可以直接塞进 `Loop.body`、`Sequence.nodes`、`ForEach.body`,与内置原语平起平坐——不需要继承任何基类,也不需要在引擎里登记类型。
 
-一个真实例子(小说场景的 `ReviewChain`,见 `scenarios/novel/review_chain.py`):"AI critic 先挡掉明显问题,通过后再让人工把关"。它把两个 critic 串起来短路求值,整体仍满足 `{passed, feedback}` 契约,于是能直接顶替 `Loop` 的 `critic`——`Loop` 完全不知道自己的 critic 内部还套了几层。这类"多道关卡"是评审策略,不同场景要的关卡数和顺序都不一样,所以它留在场景侧;引擎这边一行都不用改。
+一个真实例子(小说场景的 `_ChapterHumanReviewCheckpoint`,见 `scenarios/novel/stages.py`):它包住一个真正的 `Checkpoint`,在其返回之后补一刀状态写回(人工判否时把该章 status 打回 `drafted`)。"暂停/恢复"是控制流、归引擎;"人工判否之后该改哪个字段"是业务策略、归场景。
 
-> 顺带说明:`Checkpoint.run()` 的返回值(流入的 `inputs` 与人工 `resume_input` 合并)天然是 critic 契约的超集,所以 `Checkpoint` 本身也能当 critic 用。"AI 评审 + 人工把关"因此是零成本组合出来的,不需要为它引入任何新概念(见 [workflow-design.md](workflow-design.md) §5)。
+反面教材也值得记一笔:早期版本里,"AI critic 先挡掉明显问题、通过后再让人工把关"曾经是场景侧一个自定义的 `ReviewChain` 节点(把多个 critic 串起来短路求值,整体顶替 `Loop` 的 `critic` 槽位)。它之所以存在,是因为当时的 `Loop` 把 `producer/critic/reviser` 三个角色写死在引擎里、只留一个 critic 槽位。§6.2 改成 `body` + 每节点判定之后,"多道关卡"变成 `body` 里多列一项,那个自定义节点就被删掉了——**原语的形状选错时,成本会以"场景侧不得不写的胶水"的形式冒出来**,这也是判断原语是否选对的一个信号。
+
+> 顺带说明:`Checkpoint.run()` 的返回值(流入的 `inputs` 与人工 `resume_input` 合并)天然是评审契约的超集,所以 `Checkpoint` 可以直接当 `Loop.body` 里的一关。"AI 评审 + 人工把关"因此是零成本组合出来的,不需要为它引入任何新概念(见 [workflow-design.md](workflow-design.md) §5)。
 
 ## 7. Workflow 定义 —— 场景方的组合方式
 
@@ -181,9 +202,9 @@ stages:
   - sequence: [stage_a, stage_b]
 
   - loop:
-      producer: stage_c
-      critic: stage_c_critic
-      reviser: stage_c_reviser
+      name: stage_c_review
+      body: [stage_c, stage_c_critic]        # 一轮依次跑它们
+      continue_when: _loop.stage_c_review.last.needs_revision   # 真则重开一轮
       max_iterations: 3
       on_exceed: escalate_to_checkpoint
 
@@ -193,9 +214,9 @@ stages:
       items_path: <某个列表状态字段>   # 逐个遍历它;当前元素每轮发布到游标 item_path
       body:                            # body 里的 Stage 用 reads=[<item_path>] 读当前元素
         loop:
-          producer: stage_d
-          critic: stage_d_critic
-          reviser: stage_d_reviser
+          name: stage_d_review
+          body: [stage_d, stage_d_critic]
+          continue_when: _loop.stage_d_review.last.needs_revision
           max_iterations: 2
 
   - sequence: [stage_e, stage_f]
@@ -219,10 +240,10 @@ stages:
     model: claude-sonnet-5   # 这个 sequence 及其包含的两个 Stage 都用这个模型
 
   - loop:
-      producer: outline_generation
-      critic: outline_critic
-      reviser: outline_generation
-    model: claude-sonnet-5
+      name: outline_loop
+      body: [outline_generation, outline_critic]
+      continue_when: _loop.outline_loop.last.needs_revision
+    model: claude-sonnet-5   # 这个 loop 及其 body 里的两个 Stage 都用这个模型
 
   - stage: chapter_critic
     model: claude-haiku-4-5   # 单个 Stage 也可以单独覆盖
@@ -236,9 +257,9 @@ stages:
 
 1. **定义 State Schema**:这个场景需要跨步骤追踪哪些事实/状态。
 2. **拆 Stage**:把整个任务拆成若干输入输出明确的步骤,写出每个 Stage 的 `input_schema`/`output_schema`。
-3. **识别需要质检的环节**,给对应 Stage 套一层 `Loop`(producer/critic/reviser + 退出条件)。
+3. **识别需要质检的环节**,给对应 Stage 套一层 `Loop`:`body` 列出"生成 → 评审"这一串节点,`continue_when` 指向评审产出的那个"还要再改一轮"字段。
 4. **识别需要对列表重复处理的环节**(如"逐章"/"逐条"),套一层 `ForEach`。
-5. **决定哪些节点需要人工介入**,插入 `Checkpoint`;如果人工审阅该落在某个已有 `Loop` 的评审环节里(而不是生成完之后再单独确认),写一个自定义 Node(§6.5)把 `Checkpoint` 和 AI critic 串起来,直接顶替原来的 `critic`。
+5. **决定哪些节点需要人工介入**,插入 `Checkpoint`;如果人工审阅该落在某个已有 `Loop` 的评审环节里(而不是生成完之后再单独确认),直接把它加在该 `Loop` 的 `body` 末尾——排在 AI critic 之后,于是 AI 判否时它会被短路跳过,而它自己判否时同样驱动下一轮重写。
 6. **为每个 Stage 开发/挂载 ToolSet**——这是主要的开发工作量所在,流程结构(2–5 步)通常一次设计好之后很少再变。
 7. 组装成 Workflow 定义并运行。
 
@@ -247,7 +268,7 @@ stages:
 [workflow-design.md](workflow-design.md) 是按上述步骤产出的第一个具体实例:
 
 - 其中的每个阶段(立意扩展、角色设计、大纲生成…)都是一个 Stage 配置。
-- 大纲评审(3.5)、章节审校(3.8)都是同一个 `Loop` 原语的两次独立实例化,且都用场景自定义的 `ReviewChain`(§6.5)把 AI critic 与人工 `Checkpoint` 串成同一个 critic,实现"AI 通过后再问人,人工反馈同样驱动 reviser 重写"——引擎侧没有为此新增任何原语。
+- 大纲评审(3.5)、章节审校(3.8)都是同一个 `Loop` 原语的两次独立实例化,`body` 都是"生成 → AI 评审 → 人工确认"三关,实现"AI 通过后再问人,人工反馈同样驱动下一轮重写"——引擎侧没有为此新增任何原语,场景侧也不需要任何组合节点。
 - 逐章撰写(3.6)是 `ForEach(chapters, body=Loop(...))` 的实例化。
 - 故事圣经([story-bible-schema.md](story-bible-schema.md))是 State Schema 的一个具体实例,不属于引擎本身。
 

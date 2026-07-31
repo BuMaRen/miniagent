@@ -21,7 +21,7 @@ miniagent/
 │   ├── workflow.py             #   Workflow:节点编排 + from_spec(声明式定义解析)
 │   └── primitives/             #   四个控制流原语
 │       ├── sequence.py         #     顺序执行
-│       ├── loop.py             #     Critic-Reviser 循环(含超限策略)
+│       ├── loop.py             #     迭代:同一份输入反复跑 body 直到判定放行(含超限策略)
 │       ├── foreach.py          #     遍历子流程
 │       └── checkpoint.py       #     人工断点(支持异步挂起/恢复)
 │
@@ -54,7 +54,7 @@ miniagent/
 
 1. **Node 统一协议** — Stage 和四个控制流原语都实现 `run(ctx, inputs)`,因此能任意嵌套(`ForEach` 的 body 可以是 `Loop`)。这是"用少量原语组合出任意流程"的基础。
 2. **reads/writes 声明式** — Stage 显式声明需要读写的状态切片,既能只向 LLM 注入相关上下文(控制成本),又能做依赖分析(判断哪些 Stage 可并行)。
-3. **Loop 的退出与超限策略** — "什么叫合格"由 critic 的输出决定,引擎不做假设;超限有 `accept_last / escalate_to_checkpoint / raise` 三种策略,杜绝死循环。
+3. **Loop 的退出与超限策略** — "什么叫合格"由 `continue_when` 指向的那条状态路径决定,引擎只读它的真假、不认识任何业务字段名;超限有 `accept_last / escalate_to_checkpoint / raise` 三种策略,杜绝死循环。
 4. **两种记忆分离** — `agent/memory.py` 是单次 Agent 运行内的短期对话记忆;`state/` 是跨 Stage 的长期结构化事实。用摘要保证连贯,用结构化状态保证事实一致,职责分开。
 5. **能力通过 ToolSet 挂载,而非改结构** — 换场景/做专业化的预期改动是"换一套 ToolSet + 换一份 State Schema",Stage/Loop/ForEach 的骨架不动。
 

@@ -53,7 +53,7 @@ python -m scenarios.novel.offline_demo
 内部原理:`offline_demo.py` 给每个需要 LLM 的 Stage 配一个
 `ScriptedLLMClient`(手法与 `tests/agent/test_agent.py` 一致),按
 `stages.py` 里约定的 JSON 契约预先写好这一次"生成"的内容;Critic 类
-Stage 统一脚本成 `passed: true`,所以 Loop 一次通过、不触发 reviser——
+Stage 统一脚本成 `needs_revision: false`,所以每个 Loop 一轮就跑完、不会重开——
 这是为了让"流水线通不通"这件事确定性可复现,**不代表真实运行时 Loop
 不会修订**,也不意味着第一章的内容是随手写的占位符:那就是这一版真正
 要交付的正文。
