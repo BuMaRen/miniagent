@@ -127,7 +127,12 @@ def build_llm_client(model: str | None = None, log_dir: Path | None = None) -> L
     if provider == "anthropic":
         from llm.providers.anthropic import AnthropicClient
 
-        client: LLMClient = AnthropicClient(api_key=api_key, model=resolved_model, max_tokens=32768)
+        client: LLMClient = AnthropicClient(
+            api_key=api_key, 
+            model=resolved_model, 
+            base_url=os.environ.get("ANTHROPIC_API_BASE_URL", "http://localhost:11434/v1"),
+            max_tokens=32768,
+        )
     else:
         from llm.providers.openai import OpenAIClient
 
