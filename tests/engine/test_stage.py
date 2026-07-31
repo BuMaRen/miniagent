@@ -1,9 +1,13 @@
 import unittest
 
 from engine.context import LifecycleHooks, RunContext
-from engine.stage import Stage
+from engine.stage import ExecutorRegistry, Stage, default_registry, executor
 from state.backends.memory import InMemoryStateStore
 from state.schema import SchemaError, StateSchema
+
+
+def _dummy_executor(ctx, inputs):
+    return inputs
 
 
 class StageRunTests(unittest.TestCase):
@@ -76,6 +80,44 @@ class StageRunTests(unittest.TestCase):
         outputs = stage.run(self.ctx, {"a": 1})
         self.assertEqual(self.state.snapshot(), before)
         self.assertEqual(outputs, {"echo": {"a": 1}})
+
+
+class ExecutorRegistryTests(unittest.TestCase):
+    def setUp(self):
+        self.registry = ExecutorRegistry()
+
+    def test_register_returns_true_on_success(self):
+        self.assertTrue(self.registry.register("_dummy_executor", _dummy_executor))
+        self.assertIs(self.registry.get("_dummy_executor"), _dummy_executor)
+
+    def test_register_duplicate_returns_false(self):
+        self.registry.register("_dummy_executor", _dummy_executor)
+        self.assertFalse(self.registry.register("_dummy_executor", _dummy_executor))
+
+    def test_get_missing_raises_keyerror(self):
+        with self.assertRaises(KeyError):
+            self.registry.get("nope")
+
+    def test_unregister_removes_executor(self):
+        self.registry.register("_dummy_executor", _dummy_executor)
+        self.registry.unregister("_dummy_executor")
+        with self.assertRaises(KeyError):
+            self.registry.get("_dummy_executor")
+
+    def test_unregister_missing_is_noop(self):
+        self.registry.unregister("never_registered")  # should not raise
+
+
+class ExecutorDecoratorTests(unittest.TestCase):
+    def tearDown(self):
+        default_registry.unregister("_decorated_dummy")
+
+    def test_executor_decorator_registers_to_default_registry(self):
+        @executor
+        def _decorated_dummy(ctx, inputs):
+            return inputs
+
+        self.assertIs(default_registry.get("_decorated_dummy"), _decorated_dummy)
 
 
 if __name__ == "__main__":

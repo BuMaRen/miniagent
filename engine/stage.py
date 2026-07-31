@@ -43,6 +43,55 @@ class Node(Protocol):
 Executor = Callable[["RunContext", dict[str, Any]], dict[str, Any]]
 
 
+class ExecutorRegistry:
+    """名称 -> Executor 的登记表(与 tools/registry.py 的 ToolRegistry 对称)。
+
+    为"把 Stage 构造下沉到框架"做准备:届时可以按名字从这里查到 Executor,
+    结合声明式配置(reads/writes/schema...)组装出 Stage,而不必在场景侧
+    (如 scenarios/novel/stages.py)一个个手写 build_xxx_stage 函数。
+    """
+
+    def __init__(self) -> None:
+        self._executors: dict[str, Executor] = {}
+
+    def register(self, name: str, fn: Executor) -> bool:
+        """登记一个 executor;遇到重名返回 False,否则返回 True。"""
+        if name in self._executors:
+            return False
+        self._executors[name] = fn
+        return True
+
+    def unregister(self, name: str) -> None:
+        """移除一个 executor(重名登记前先卸载,或热替换时会用到)。"""
+        self._executors.pop(name, None)
+
+    def get(self, name: str) -> Executor:
+        """按名取回 executor,缺失时给出清晰错误。"""
+        try:
+            return self._executors[name]
+        except KeyError:
+            raise KeyError(f"Executor '{name}' 未注册") from None
+
+
+# 全局默认注册表,供场景侧用 @executor 装饰器登记。
+default_registry = ExecutorRegistry()
+
+
+def executor(func: Executor) -> Executor:
+    """装饰器:把一个函数注册为 executor,登记到 default_registry。
+
+    用法:
+        @executor
+        def input_parsing(ctx: RunContext, inputs: dict[str, Any]) -> dict[str, Any]:
+            ...
+
+    与 tools.registry.tool 对称:tool 面向 LLM 可调用的工具,executor 面向
+    Stage 的执行体;两者都以函数名(func.__name__)作为登记 key。
+    """
+    default_registry.register(func.__name__, func)
+    return func
+
+
 @dataclass
 class Stage:
     """一个具体的执行步骤。
