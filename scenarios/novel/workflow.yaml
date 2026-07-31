@@ -18,7 +18,7 @@ stages:
       - input_parsing
       - concept_expansion
       - character_world_design
-    model: claude-sonnet-5
+    model: claude-sonnet-latest
 
   # Loop 的一轮就是把 body 依次跑一遍(Sequence 的规则),跑完没人要求重来就算
   # 通过。continue_when 是一条状态路径("是非器"):每个 body 节点跑完后,引擎读
