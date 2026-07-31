@@ -21,6 +21,7 @@ docs/framework-design.md §3.2 强调的"Stage 不关心怎么产出输出"的�
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable
 
 from agent.agent import Agent
@@ -32,9 +33,19 @@ from llm.client import LLMClient
 from state.schema import StateSchema
 from tools.registry import ToolRegistry
 
-from scenarios.novel.state_schema import CHAPTER, CHARACTER, FORESHADOWING, STORY_BIBLE_SCHEMA, WORLD_ENTRY
+from scenarios.novel.state_schema import NOVEL_TYPES, STORY_BIBLE_SCHEMA
 from scenarios.novel.toolsets.research import RESEARCH_TOOLSET
 from scenarios.novel.toolsets.qa import QA_TOOLSET, count_chinese_characters
+
+# 各 Stage 的 output_schema 声明在这里(纯 YAML,DSL 见 state/schema.py 模块
+# docstring);需要复用 story_bible 子结构(character/chapter/...)的,靠
+# types=NOVEL_TYPES 从 state_schema.yaml 借出那张具名类型表(见其 !type 引用),
+# 而不是在这两处 YAML 里各自重复内联同一段结构。
+_SCHEMAS_DIR = Path(__file__).with_name("schemas")
+
+
+def _load_output_schema(file_name: str) -> StateSchema:
+    return StateSchema.from_yaml(_SCHEMAS_DIR / file_name, types=NOVEL_TYPES)
 
 # 由调用方(run.py / offline_demo.py)提供:按 (Stage 名, 生效 model) 给出一个
 # LLMClient。model 是 engine.workflow.Workflow.resolve_stage_models 从
@@ -66,12 +77,6 @@ _STYLE_GUIDE = """
 - 涉及制度、器物、纪年、货币等细节,如有疑问请先用 lookup_han_dynasty_fact
   查证,不要凭现代常识臆测(例如:此时还没有"五铢钱""年号"式的日常自称)。
 """
-
-_JSON_ONLY = (
-    "只输出一个 JSON 对象作为最终回复,不要包含任何 JSON 之外的说明文字、"
-    "不要用 Markdown 代码块包裹。JSON 的顶层键名必须与下面列出的完全一致"
-    "(包括其中的点号),不要嵌套在别的键下面。"
-)
 
 # Loop 的游标:引擎把"上一个跑完的 body 节点的产出"整块发布在这条状态路径上
 # (见 engine/primitives/loop.py),形如 f"_loop.{loop 的 name}.last"。它是"上一轮
@@ -140,6 +145,8 @@ def build_input_parsing_stage() -> Stage:
 # 3.2 立意扩展
 # ---------------------------------------------------------------------------
 
+CONCEPT_EXPANSION_OUTPUT_SCHEMA = _load_output_schema("concept_expansion_output.yaml")
+
 _CONCEPT_PROMPT = f"""你负责小说创作流程中的"立意扩展"阶段。
 {_STYLE_GUIDE}
 输入会包含题材(topic)以及当前的 story_bible.meta(可能 title/logline 等尚为空)。
@@ -147,16 +154,9 @@ _CONCEPT_PROMPT = f"""你负责小说创作流程中的"立意扩展"阶段。
 core_conflict(核心冲突:谁 vs 谁/什么,为什么无法回避)。这一步不产出情节细节,
 只锁定"为什么值得写"与"冲突是什么",作为后续大纲的锚点。
 
-{_JSON_ONLY}
 输出格式:
-{{"story_bible.meta": {{"logline": "...", "theme": "...", "core_conflict": "..."}}}}
+{CONCEPT_EXPANSION_OUTPUT_SCHEMA.to_prompt_example()}
 """
-
-
-CONCEPT_EXPANSION_OUTPUT_SCHEMA = StateSchema(
-    "concept_expansion_output",
-    {"story_bible.meta": {"logline": str, "theme": str, "core_conflict": str}},
-)
 
 
 def build_concept_expansion_stage(client: LLMClient) -> Stage:
@@ -179,6 +179,8 @@ def build_concept_expansion_stage(client: LLMClient) -> Stage:
 # 3.3 角色与世界观设计
 # ---------------------------------------------------------------------------
 
+CHARACTER_WORLD_DESIGN_OUTPUT_SCHEMA = _load_output_schema("character_world_design_output.yaml")
+
 _CHARACTER_WORLD_PROMPT = f"""你负责小说创作流程中的"角色与世界观设计"阶段。
 {_STYLE_GUIDE}
 输入包含 story_bible.meta(已有 logline/theme/core_conflict)。
@@ -191,30 +193,13 @@ _CHARACTER_WORLD_PROMPT = f"""你负责小说创作流程中的"角色与世界�
    与盘查)——现实主义故事不强求脸谱化反派。
 3. 补充最小必要的世界观规则(只写情节会用到的规则,如路引制度、市集与宵禁、
    张骞出使西域的历史背景),每条要标注 established_in_chapter(通常是 1)。
-这一阶段还没有章节可记录,每个角色的 status_log 留空数组即可;后续阶段若要
-往里追加,元素形状必须是 {{"after_chapter": 1, "state": "..."}}。
+这一阶段还没有章节可记录,每个角色的 status_log 留空数组即可(下面输出格式
+示例里 status_log 展示的是"日后追加时单个元素长什么样",本阶段应输出 []);
+relationships 没有可写的关系时同样留空数组即可。
 
-{_JSON_ONLY}
 输出格式:
-{{
-  "story_bible.meta": {{"title": "..."}},
-  "story_bible.characters": [{{"id": "...", "name": "...", "role": "...",
-    "goal": "...", "motivation": "...", "flaw": "...", "arc": "...",
-    "relationships": [{{"target_id": "另一个角色的 id", "relation": "..."}}], "status_log": []}}],
-  "story_bible.world": [{{"id": "...", "name": "...", "description": "...",
-    "established_in_chapter": 1}}]
-}}
+{CHARACTER_WORLD_DESIGN_OUTPUT_SCHEMA.to_prompt_example()}
 """
-
-
-CHARACTER_WORLD_DESIGN_OUTPUT_SCHEMA = StateSchema(
-    "character_world_design_output",
-    {
-        "story_bible.meta": {"title": str},
-        "story_bible.characters": [CHARACTER],
-        "story_bible.world": [WORLD_ENTRY],
-    },
-)
 
 
 def build_character_world_design_stage(client: LLMClient) -> Stage:
@@ -240,6 +225,8 @@ def build_character_world_design_stage(client: LLMClient) -> Stage:
 # 游标是空的就是"生成",后续轮次游标里带着上一轮的评审意见就是"修订"。
 # ---------------------------------------------------------------------------
 
+OUTLINE_GENERATION_OUTPUT_SCHEMA = _load_output_schema("outline_generation_output.yaml")
+
 _OUTLINE_PROMPT = f"""你负责小说创作流程中的"大纲与节拍生成"阶段。
 {_STYLE_GUIDE}
 输入包含 story_bible.meta、story_bible.characters、story_bible.world。
@@ -249,35 +236,20 @@ _OUTLINE_PROMPT = f"""你负责小说创作流程中的"大纲与节拍生成"�
 
 你的任务:按 meta.structure_template 生成章节列表,中短篇建议 6-15 章,
 单章 1000-2500 字;每章包含 index/title/beat_summary(该章目标、关键事件、
-结尾钩子、涉及的角色与伏笔)。同时规划伏笔(foreshadowing):哪一章埋下、
-计划哪一章回收——payoff_chapter 请直接填入计划回收的具体章节号,不要留
-null,"计划哪一章回收"这个决定就应该在这一步做出,不要留给后续阶段猜。
+结尾钩子、涉及的角色与伏笔),此时都还没写正文,status 填 "planned"、
+draft_summary/text 留空字符串、word_count 填 0。同时规划伏笔(foreshadowing):
+哪一章埋下、计划哪一章回收——payoff_chapter 请直接填入计划回收的具体章节号,
+不要留 null,"计划哪一章回收"这个决定就应该在这一步做出,不要留给后续阶段猜;
+新增的伏笔 status 填 "planted"。
 
 这一步通常不改 story_bible.meta.title/logline,原样照抄输入的值即可;
 但如果上一轮 feedback 明确指出 title 或 logline 本身存在硬伤(如纪年/史实
 错误),请在这两个字段里给出修正后的版本。meta 的其余字段(theme/
 core_conflict 等)始终不要碰、也不需要在输出里面出现。
 
-{_JSON_ONLY}
 输出格式(story_bible.meta 必须输出,未修订时原样照抄输入值):
-{{
-  "story_bible.chapters": [{{"index": 1, "title": "...", "beat_summary": "...",
-    "draft_summary": "", "text": "", "word_count": 0, "status": "planned"}}],
-  "story_bible.foreshadowing": [{{"id": "...", "planted_in_chapter": 1,
-    "description": "...", "payoff_chapter": 5, "status": "planted"}}],
-  "story_bible.meta": {{"title": "...", "logline": "..."}}
-}}
+{OUTLINE_GENERATION_OUTPUT_SCHEMA.to_prompt_example()}
 """
-
-
-OUTLINE_GENERATION_OUTPUT_SCHEMA = StateSchema(
-    "outline_generation_output",
-    {
-        "story_bible.chapters": [CHAPTER], 
-        "story_bible.foreshadowing": [FORESHADOWING],
-        "story_bible.meta": {"title": str, "logline": str},
-    },
-)
 
 
 def build_outline_generation_stage(client: LLMClient) -> Stage:
@@ -313,7 +285,6 @@ story_bible.meta / story_bible.characters 供你核对呼应关系。
 - 每条伏笔是否都安排了回收的章节(payoff_chapter 不能一直是 null 却又没有
   在后续任何章节的 beat_summary 里被提及)。
 
-{_JSON_ONLY}
 输出格式:{{"{NEEDS_REVISION_KEY}": true 或 false, "feedback": "若
 {NEEDS_REVISION_KEY} 为 true,给出具体、可执行的修改意见;若为 false,可留空字符串"}}
 注意 {NEEDS_REVISION_KEY} 的含义是"还需要再改一轮":大纲合格请填 false,
@@ -321,9 +292,7 @@ story_bible.meta / story_bible.characters 供你核对呼应关系。
 """
 
 
-CRITIC_OUTPUT_SCHEMA = StateSchema(
-    "critic_output", {NEEDS_REVISION_KEY: bool, "feedback": str}
-)
+CRITIC_OUTPUT_SCHEMA = _load_output_schema("critic_output.yaml")
 
 
 def build_outline_critic_stage(client: LLMClient) -> Stage:
@@ -362,6 +331,8 @@ def build_outline_human_review_checkpoint() -> Checkpoint:
 
 CHAPTER_LOOP_ITEM_PATH = "_foreach.chapter_loop.item"
 
+CHAPTER_DRAFTING_OUTPUT_SCHEMA = _load_output_schema("chapter_drafting_output.yaml")
+
 _CHAPTER_DRAFTING_PROMPT = f"""你负责小说创作流程中的"逐章撰写"阶段。
 {_STYLE_GUIDE}
 输入的 state 中,"{CHAPTER_LOOP_ITEM_PATH}" 是本轮要撰写的这一章的大纲条目
@@ -386,20 +357,11 @@ feedback,说明这是一次修订,那条 feedback 就是上一轮审校驳回本
 并把 status 改成 "drafted"。你必须返回**完整的** story_bible.chapters 数组
 (把当前 index 对应的那一项替换成新版本,其余章节原样保留,不要丢失)。
 
-{_JSON_ONLY}
 输出格式(数组必须包含全部章节,下面只展示当前撰写的这一条该长什么样,
-其余章节原样照抄输入里对应的条目):
-{{"story_bible.chapters": [{{"index": 1, "title": "...", "beat_summary": "...",
-    "draft_summary": "...", "text": "...", "word_count": 0, "status": "drafted"}}],
-  "chapter_index": 当前章节的 index,
-  "chapter_text": "本章正文,与 chapters 数组里的 text 保持一致,方便审校阶段直接读取"}}
+其余章节原样照抄输入里对应的条目;chapter_index 填当前章节的 index,
+chapter_text 与 chapters 数组里对应的 text 保持一致,方便审校阶段直接读取):
+{CHAPTER_DRAFTING_OUTPUT_SCHEMA.to_prompt_example()}
 """
-
-
-CHAPTER_DRAFTING_OUTPUT_SCHEMA = StateSchema(
-    "chapter_drafting_output",
-    {"story_bible.chapters": [CHAPTER], "chapter_index": int, "chapter_text": str},
-)
 
 
 def build_chapter_drafting_stage(client: LLMClient) -> Stage:
@@ -440,7 +402,6 @@ foreshadowing 供你核对矛盾。
   "顿"点,不能是整章默认节奏)——如果存在,视为不通过,并在 feedback 里
   指出具体段落。
 
-{_JSON_ONLY}
 输出格式:{{"{NEEDS_REVISION_KEY}": true 或 false, "feedback": "若
 {NEEDS_REVISION_KEY} 为 true,给出具体、指向被指出片段的修改意见;若为 false,
 可留空字符串"}}
@@ -568,6 +529,10 @@ def build_chapter_finalize_stage() -> Stage:
 # 3.9 全文统稿与润色
 # ---------------------------------------------------------------------------
 
+MANUSCRIPT_ASSEMBLY_POLISH_OUTPUT_SCHEMA = _load_output_schema(
+    "manuscript_assembly_polish_output.yaml"
+)
+
 _MANUSCRIPT_POLISH_PROMPT = f"""你负责小说创作流程中的"全文统稿与润色"阶段。
 {_STYLE_GUIDE}
 输入包含全部 story_bible.chapters 与 story_bible.foreshadowing。
@@ -578,20 +543,10 @@ _MANUSCRIPT_POLISH_PROMPT = f"""你负责小说创作流程中的"全文统稿�
    resolved(补上 payoff_chapter),确认不再需要的可标记为 dropped,但不能让
    状态一直悬空在 planted 却已过了计划回收的章节。
 
-{_JSON_ONLY}
 输出格式(两个数组都必须包含全部条目,下面只展示元素该长什么样,
 没有改动的条目原样照抄输入,只对确实要改的条目做最小必要修订):
-{{"story_bible.chapters": [{{"index": 1, "title": "...", "beat_summary": "...",
-    "draft_summary": "...", "text": "...", "word_count": 0, "status": "drafted"}}],
-  "story_bible.foreshadowing": [{{"id": "...", "planted_in_chapter": 1,
-    "description": "...", "payoff_chapter": 5, "status": "resolved"}}]}}
+{MANUSCRIPT_ASSEMBLY_POLISH_OUTPUT_SCHEMA.to_prompt_example()}
 """
-
-
-MANUSCRIPT_ASSEMBLY_POLISH_OUTPUT_SCHEMA = StateSchema(
-    "manuscript_assembly_polish_output",
-    {"story_bible.chapters": [CHAPTER], "story_bible.foreshadowing": [FORESHADOWING]},
-)
 
 
 def build_manuscript_assembly_polish_stage(client: LLMClient) -> Stage:

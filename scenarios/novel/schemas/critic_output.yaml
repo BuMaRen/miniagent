@@ -1,0 +1,10 @@
+# Critic 类 Stage(outline_critic / chapter_critic)共用的 output_schema,也是
+# 对应人工复核 Checkpoint 的 resume_input_schema(见 stages.py)。
+# needs_revision 这个键名硬编码在这里,与 stages.py 里的 NEEDS_REVISION_KEY
+# 常量字面量保持一致——workflow.yaml 的 continue_when 也直接写死这个路径段
+# (见 workflow.yaml 对 _loop.*.last.needs_revision 的引用),三处都是同一个
+# 字符串常量,不必(也没有机制)在 YAML 里反过来引用 Python 常量。
+name: critic_output
+definition:
+  needs_revision: bool
+  feedback: str
