@@ -73,7 +73,7 @@ def _clear_resume_point(state_path: Path) -> None:
     _resume_path(state_path).unlink(missing_ok=True)
 
 
-_PROVIDER_DEFAULT_MODEL = {"anthropic": "claude-sonnet-4-5", "openai": "gpt-4o"}
+_PROVIDER_DEFAULT_MODEL = {"anthropic": "claude-sonnet-latest", "openai": "gpt-4o"}
 _PROVIDER_API_KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 
 

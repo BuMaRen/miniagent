@@ -253,20 +253,30 @@ _OUTLINE_PROMPT = f"""你负责小说创作流程中的"大纲与节拍生成"�
 计划哪一章回收——payoff_chapter 请直接填入计划回收的具体章节号,不要留
 null,"计划哪一章回收"这个决定就应该在这一步做出,不要留给后续阶段猜。
 
+这一步通常不改 story_bible.meta.title/logline,原样照抄输入的值即可;
+但如果上一轮 feedback 明确指出 title 或 logline 本身存在硬伤(如纪年/史实
+错误),请在这两个字段里给出修正后的版本。meta 的其余字段(theme/
+core_conflict 等)始终不要碰、也不需要在输出里面出现。
+
 {_JSON_ONLY}
-输出格式:
+输出格式(story_bible.meta 必须输出,未修订时原样照抄输入值):
 {{
   "story_bible.chapters": [{{"index": 1, "title": "...", "beat_summary": "...",
     "draft_summary": "", "text": "", "word_count": 0, "status": "planned"}}],
   "story_bible.foreshadowing": [{{"id": "...", "planted_in_chapter": 1,
-    "description": "...", "payoff_chapter": 5, "status": "planted"}}]
+    "description": "...", "payoff_chapter": 5, "status": "planted"}}],
+  "story_bible.meta": {{"title": "...", "logline": "..."}}
 }}
 """
 
 
 OUTLINE_GENERATION_OUTPUT_SCHEMA = StateSchema(
     "outline_generation_output",
-    {"story_bible.chapters": [CHAPTER], "story_bible.foreshadowing": [FORESHADOWING]},
+    {
+        "story_bible.chapters": [CHAPTER], 
+        "story_bible.foreshadowing": [FORESHADOWING],
+        "story_bible.meta": {"title": str, "logline": str},
+    },
 )
 
 
@@ -286,7 +296,7 @@ def build_outline_generation_stage(client: LLMClient) -> Stage:
             "story_bible.characters",
             "story_bible.world",
         ],
-        writes=["story_bible.chapters", "story_bible.foreshadowing"],
+        writes=["story_bible.chapters", "story_bible.foreshadowing", "story_bible.meta"],
         output_schema=OUTLINE_GENERATION_OUTPUT_SCHEMA,
     )
 
