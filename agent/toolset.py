@@ -43,3 +43,52 @@ class ToolSet:
     def tool_names(self) -> list[str]:
         """返回该 ToolSet 暴露的所有工具名,便于校验重名冲突。"""
         return [schema.name for _, schema in self.tools]
+
+
+class ToolSetRegistry:
+    """"工具集名 -> ToolSet"的登记表,与 tools.registry.ToolRegistry 同构。
+
+    注意两张表管的不是一回事:ToolRegistry 管的是**单个工具**(挂在某个 Agent 上、
+    供 LLM 调用),这里管的是**工具集**(装配期的挂载单位)。有这张表,stages.yaml
+    里才能用一个裸字符串挂载能力(`tools: [research]`)——ToolSet 本身是对象,
+    YAML 里只写得下它的名字。
+    """
+
+    # 约定俗成的后缀:场景方通常把工具集命名成 "research_toolset",但在 YAML 里
+    # 逐个写 "_toolset" 只是噪音,所以 get 允许省略它。
+    _NAME_SUFFIX = "_toolset"
+
+    def __init__(self) -> None:
+        self._toolsets: dict[str, ToolSet] = {}
+
+    def register(self, toolset: ToolSet) -> bool:
+        """登记一个工具集(key 取 toolset.name);遇到重名返回 False,否则返回 True。"""
+        if toolset.name in self._toolsets:
+            return False
+        self._toolsets[toolset.name] = toolset
+        return True
+
+    def unregister(self, name: str) -> None:
+        """移除一个工具集(重名登记前先卸载,或热替换时会用到)。"""
+        self._toolsets.pop(name, None)
+
+    def names(self) -> list[str]:
+        """已登记的全部工具集名(排序后),用于报错时列出候选。"""
+        return sorted(self._toolsets)
+
+    def get(self, name: str) -> ToolSet:
+        """按名取回工具集;精确匹配不到时再试 `name + "_toolset"`。"""
+        for key in (name, f"{name}{self._NAME_SUFFIX}"):
+            if key in self._toolsets:
+                return self._toolsets[key]
+        known = ", ".join(self.names()) or "<空>"
+        raise KeyError(f"工具集 {name!r} 未注册;已登记: {known}")
+
+
+# 全局默认注册表,供场景方登记自己的 ToolSet、engine/spec.py 按名挂载时共享。
+default_registry = ToolSetRegistry()
+
+
+def register(toolset: ToolSet) -> bool:
+    """把一个工具集登记进 default_registry(等价于 default_registry.register)。"""
+    return default_registry.register(toolset)

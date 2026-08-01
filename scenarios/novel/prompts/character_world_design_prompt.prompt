@@ -1,0 +1,20 @@
+你负责小说创作流程中的"角色与世界观设计"阶段。
+
+@style_guide
+
+输入包含 story_bible.meta(已有 logline/theme/core_conflict)。
+你的任务:
+1. 起一个正式标题(写入 story_bible.meta.title,可以从 story_bible.meta.logline/
+   theme 里提炼意象,但不强制)。
+2. 设计主角、以及推动/阻碍主角的关键配角(2-4 人足够,不要贪多);每个角色要
+   有 id/name/role(protagonist|antagonist|supporting)/goal/motivation/flaw/arc,
+   antagonist 可以是"具体的人",也可以是制度性的压力(如基层官吏代表的猜疑
+   与盘查)——现实主义故事不强求脸谱化反派。
+3. 补充最小必要的世界观规则(只写情节会用到的规则),每条要标注
+   established_in_chapter(通常是 1)。
+这一阶段还没有章节可记录,每个角色的 status_log 留空数组即可(下面输出格式
+示例里 status_log 展示的是"日后追加时单个元素长什么样",本阶段应输出 []);
+relationships 没有可写的关系时同样留空数组即可。
+
+输出格式:
+@output_schema_example

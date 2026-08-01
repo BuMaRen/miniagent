@@ -341,6 +341,18 @@ class NodeRegistry:
             raise ValueError(f"NodeRegistry: 节点名 {node.name!r} 重复登记")
         self._nodes[node.name] = node
 
+    def replace(self, node: Node) -> Node:
+        """用 node 换掉同名的已登记节点,返回被换下来的那一个。
+
+        register 刻意拒绝重名(重名多半是配置错误),但"先按声明式定义建好节点、
+        再在场景侧包一层"是正当用法——比如给某个 Stage 补一段引擎表达不了的状态
+        写回(见 scenarios/novel/stages.py)。要换的节点必须已经登记过,否则就是
+        写错了名字,按 get 的规则报错。
+        """
+        previous = self.get(node.name)
+        self._nodes[node.name] = node
+        return previous
+
     def get(self, name: str) -> Node:
         """按名取回节点,缺失时给出带"已登记清单"的清晰错误。"""
         try:

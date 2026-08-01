@@ -26,12 +26,55 @@ definition 的表示法(自定义"类型树",零三方依赖,与本仓库其余�
     · 对象字段一律"可缺省但类型受校验"——为的是配合状态的增量写入(patch 只带
       本次变更的字段);因此 validate 不强制"必填字段存在"。若 Stage 的 input/
       output 需要必填语义,可日后引入 Required 包装。
+
+场景方通常不必手写上述 Python 类型树——StateSchema.from_yaml 能把同构的 YAML
+翻译成 definition。YAML 里的写法:
+    · 标量类型名写作字符串 "str" / "int" / "float" / "bool";"any" 对应 ANY。
+    · dict 仍是 dict(对象),单元素 list 仍是同构列表([int]、[{...}])。
+    · Optional 写作 `!optional <子描述符>`,OneOf 写作 `!oneof [v1, v2, ...]`。
+上面 characters 片段对应的 YAML:
+    characters:
+      - id: str
+        name: str
+        role: !oneof [protagonist, antagonist, supporting]
+        status_log:
+          - after_chapter: int
+            state: str
+场景方只需要维护这份 YAML 声明;把它编译成 definition、实例化 StateSchema 这件
+"构造胶水"由 from_yaml 统一完成,不必再在场景代码里写 `StateSchema(name=...,
+definition=...)`。
+
+同一个子结构常常要在多处复用(如 story_bible.characters 的元素形状,同时也是
+某个 Stage output_schema 的一部分)——顶层可加一个 `types:` 段落,给子结构起名,
+别处用 `!type <名字>` 引用,而不是重复内联同一段结构:
+    types:
+      character:
+        id: str
+        name: str
+    definition:
+      characters: [!type character]
+`types:` 按书写顺序逐条编译:每条编译完就立刻写进"已就绪类型"表,所以 `!type`
+只能引用*前面已经声明过*的类型——不支持前向引用或自引用,故意不做循环检测这类
+额外复杂度。`definition:` 在整个 `types:` 都编译完之后才编译,这时全部具名类型
+都已就绪。跨文件复用具名类型时,调用方可以:
+    · 用 load_types(path) 单独编译某份 YAML 的 types: 段,拿到 {名字: 编译后的
+      类型} 这张表;
+    · 把这张表作为 `types=` 传给另一份 YAML 的 from_yaml(path, types=表),
+      这份文件里的 `!type` 就能引用表里的条目(以及自己 types: 段里更早声明的)。
+
+StateSchema.to_prompt_example() 能把 definition 渲染成一段占位符 JSON 文本,
+供 Stage 的 system prompt 里"输出格式"这类说明复用,不必手抄一份几乎同构的例子
+（两处手写容易改一处、漏改另一处)。
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 
 class SchemaError(ValueError):
@@ -182,6 +225,156 @@ def _empty(desc: Any) -> Any:
     return None
 
 
+_PROMPT_SCALAR_EXAMPLES: dict[type, Any] = {str: "...", int: 0, float: 0.0, bool: True}
+
+
+def _prompt_example(desc: Any) -> Any:
+    """按描述符生成一份"占位符 JSON 值",供 StateSchema.to_prompt_example 使用。
+
+    和 _empty 的取舍不同:这里的目标是给模型看的示例,不是合法的零值状态,所以
+    OneOf 渲染成把候选项用 "|" 连起来的字符串(一眼看到取值范围),而不是 None。
+    """
+    if isinstance(desc, Optional):
+        return _prompt_example(desc.inner)
+    if isinstance(desc, OneOf):
+        return "|".join(str(c) for c in desc.choices)
+    if desc is ANY or isinstance(desc, _AnyType) or desc is None:
+        return "..."
+    if isinstance(desc, list):
+        return [_prompt_example(desc[0])]
+    if isinstance(desc, dict):
+        return {k: _prompt_example(v) for k, v in desc.items()}
+    if isinstance(desc, type):
+        return _PROMPT_SCALAR_EXAMPLES.get(desc, "...")
+    raise SchemaError(f"无法识别的 schema 描述符 {desc!r}")
+
+
+class _YamlLoader(yaml.SafeLoader):
+    """独立子类,避免 !optional/!oneof 的构造器污染全局 yaml.SafeLoader。"""
+
+
+class _RawOptional:
+    """!optional 标签的解析期占位——inner 此时可能仍是待编译的类型名字符串。"""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+
+
+class _RawOneOf:
+    """!oneof 标签的解析期占位,理由同 _RawOptional。"""
+
+    def __init__(self, choices: list[Any]) -> None:
+        self.choices = choices
+
+
+class _RawTypeRef:
+    """!type 标签的解析期占位:记住引用的类型名,留给 _compile_yaml_node 按
+    "已编译好的具名类型表"去查——查不到(还没声明/根本没声明)就是使用错误。
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+def _construct_tagged_node(loader: yaml.SafeLoader, node: yaml.Node) -> Any:
+    """构造标签节点自身携带的值(而非按标签二次派发)。
+
+    !optional/!oneof 的标签直接标在值节点上(如 `!optional int` 里,node 本身
+    就是内容为 "int" 的标量节点),所以要按节点种类(标量/序列/映射)直接构造
+    其内容,不能走 construct_object(node)——那会按 node.tag 重新查找构造器、
+    落回这同一个标签,触发 PyYAML 的自递归保护而报错。
+    """
+    if isinstance(node, yaml.ScalarNode):
+        return loader.construct_scalar(node)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node, deep=True)
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node, deep=True)
+    raise SchemaError(f"无法识别的 YAML 节点种类: {node!r}")
+
+
+_YamlLoader.add_constructor(
+    "!optional", lambda loader, node: _RawOptional(_construct_tagged_node(loader, node))
+)
+def _construct_oneof(loader: yaml.SafeLoader, node: yaml.Node) -> "_RawOneOf":
+    choices = _construct_tagged_node(loader, node)
+    if not isinstance(choices, list):
+        raise SchemaError(f"!oneof 的取值须为列表,得到: {choices!r}")
+    return _RawOneOf(choices)
+
+
+_YamlLoader.add_constructor("!oneof", _construct_oneof)
+_YamlLoader.add_constructor(
+    "!type", lambda loader, node: _RawTypeRef(loader.construct_scalar(node))
+)
+
+_YAML_SCALAR_TYPES: dict[str, type] = {"str": str, "int": int, "float": float, "bool": bool}
+
+
+def _compile_yaml_node(node: Any, registry: dict[str, Any] | None = None) -> Any:
+    """把 yaml.load(Loader=_YamlLoader) 解析出的原生结构编译成 definition 类型树。
+
+    registry 是"已经编译好的具名类型"表(types: 段落按声明顺序逐条编译时随读随写、
+    definition: 段落用编译完的整张表),!type 引用在这张表里查不到即报错——引用
+    只能指向前面已声明的类型,不支持前向引用或自引用。
+    """
+    if isinstance(node, _RawTypeRef):
+        if registry is None or node.name not in registry:
+            raise SchemaError(
+                f"引用了未声明的类型 {node.name!r}(!type 只能引用 types: 中"
+                "更早声明的条目,不支持前向引用)"
+            )
+        return registry[node.name]
+    if isinstance(node, _RawOptional):
+        return Optional(_compile_yaml_node(node.inner, registry))
+    if isinstance(node, _RawOneOf):
+        return OneOf(*node.choices)
+    if isinstance(node, str):
+        if node == "any":
+            return ANY
+        if node in _YAML_SCALAR_TYPES:
+            return _YAML_SCALAR_TYPES[node]
+        raise SchemaError(f"未知的标量类型名 {node!r}(可用: str/int/float/bool/any)")
+    if isinstance(node, list):
+        if len(node) != 1:
+            raise SchemaError(f"schema 列表须恰好一个元素描述符,得到 {len(node)} 个: {node!r}")
+        return [_compile_yaml_node(node[0], registry)]
+    if isinstance(node, dict):
+        return {k: _compile_yaml_node(v, registry) for k, v in node.items()}
+    raise SchemaError(f"无法识别的 schema YAML 节点: {node!r}")
+
+
+def _compile_types_section(raw: dict[str, Any], base: dict[str, Any] | None) -> dict[str, Any]:
+    """编译 YAML 顶层的 types: 段,产出一张"具名类型 -> 编译后类型"的表。
+
+    base 是外部注入的已编译类型(用于跨文件复用,见 load_types);本文件 types:
+    段的条目按书写顺序逐条编译并立即写入这张表,所以段内后面的条目可以引用前面
+    的条目(乃至 base 里的条目),但不能反过来。
+    """
+    registry: dict[str, Any] = dict(base or {})
+    for type_name, raw_type in (raw.get("types") or {}).items():
+        registry[type_name] = _compile_yaml_node(raw_type, registry)
+    return registry
+
+
+def _load_raw_yaml(path: str | Path) -> dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.load(f, Loader=_YamlLoader) or {}
+
+
+def load_types(path: str | Path, types: dict[str, Any] | None = None) -> dict[str, Any]:
+    """只编译某份 YAML 的 types: 段,返回 {类型名: 编译后的类型} 这张表。
+
+    给"只想借用别处具名类型"的调用方用:该文件不必有 definition:(有也会被忽略)。
+    典型用法是场景方的共享状态 schema(如 story_bible)在 types: 里声明了
+    character/chapter 这类子结构,各 Stage 的 output_schema YAML 通过
+    `StateSchema.from_yaml(path, types=load_types(共享 schema 路径))` 复用它们,
+    而不必各自重复内联同一段结构。
+    """
+    raw = _load_raw_yaml(path)
+    return _compile_types_section(raw, types)
+
+
 @dataclass
 class StateSchema:
     """状态结构声明。
@@ -193,6 +386,31 @@ class StateSchema:
 
     name: str
     definition: Any = field(default=None)
+
+    @classmethod
+    def from_yaml(cls, path: str | Path, types: dict[str, Any] | None = None) -> "StateSchema":
+        """从 YAML 文件加载一份 StateSchema(见模块 docstring 的 YAML DSL)。
+
+        场景方只需按 DSL 写字段结构;把它编译成 definition、实例化 StateSchema
+        这件"构造胶水"由这里统一做掉,场景代码不必再自己写
+        `StateSchema(name=..., definition=...)`。
+
+        YAML 顶层结构: {name: <schema 名称>, types: <具名类型表>,
+        definition: <类型树>};name 缺省时取文件名(不含扩展名)。
+
+        Args:
+            types: 外部注入的已编译具名类型(见 load_types),供本文件的 !type
+                引用跨文件复用;与本文件自己 types: 段的编译结果合并(本文件的
+                同名条目优先)后,再用来编译 definition。
+        """
+        raw = _load_raw_yaml(path)
+        name = raw.get("name") or Path(path).stem
+        registry = _compile_types_section(raw, types)
+        raw_definition = raw.get("definition")
+        definition = (
+            _compile_yaml_node(raw_definition, registry) if raw_definition is not None else None
+        )
+        return cls(name=name, definition=definition)
 
     def empty(self) -> dict[str, Any]:
         """构造一个符合 schema 的空初始状态(用于新一次运行的起点)。
@@ -213,6 +431,15 @@ class StateSchema:
         if self.definition is None:
             return {}
         return _to_json_schema(self.definition)
+
+    def to_prompt_example(self) -> str:
+        """把 definition 渲染成一段占位符 JSON 文本,供 prompt 里"输出格式"这类
+        说明复用,不必在场景代码里再手抄一份几乎同构的例子(见模块 docstring)。
+        definition 为 None 时返回 "{}"。
+        """
+        if self.definition is None:
+            return "{}"
+        return json.dumps(_prompt_example(self.definition), ensure_ascii=False, indent=2)
 
     def validate(self, data: dict[str, Any]) -> None:
         """校验一份数据是否符合 schema;不符合抛出带清晰路径的 SchemaError。"""
@@ -258,3 +485,61 @@ class StateSchema:
             else:
                 raise SchemaError(f"{here}: 路径超出了 schema 结构(在标量/枚举处继续下钻)")
         return desc
+
+
+class SchemaRegistry:
+    """"schema 名 -> StateSchema"的登记表,与 tools.registry.ToolRegistry 同构。
+
+    为的是让 stages.yaml 里能用一个裸字符串引用 schema(`output_schema:
+    critic_output`)——schema 本身是对象,YAML 里只写得下它的名字。
+    """
+
+    def __init__(self) -> None:
+        self._schemas: dict[str, StateSchema] = {}
+
+    def register(self, schema: StateSchema) -> bool:
+        """登记一份 schema(key 取 schema.name);遇到重名返回 False,否则返回 True。"""
+        if schema.name in self._schemas:
+            return False
+        self._schemas[schema.name] = schema
+        return True
+
+    def unregister(self, name: str) -> None:
+        """移除一份 schema(重名登记前先卸载,或热替换时会用到)。"""
+        self._schemas.pop(name, None)
+
+    def names(self) -> list[str]:
+        """已登记的全部 schema 名(排序后),用于报错时列出候选。"""
+        return sorted(self._schemas)
+
+    def load_dir(self, path: str | Path, types: dict[str, Any] | None = None) -> list[str]:
+        """把一个目录下的全部 `*.yaml` 当作 schema 声明登记进来,返回登记到的名字。
+
+        每个文件走已有的 StateSchema.from_yaml(path, types=types),名字取文件里的
+        `name:`(缺省是文件名)。types 是跨文件复用的具名类型表(见 load_types),
+        整目录共用一份——场景方各 Stage 的 output_schema 往往都要借用同一批子结构。
+
+        重复调用是幂等的(已登记的同名 schema 跳过),因此场景方可以在每次
+        build_node_registry 时无脑调一次。
+        """
+        directory = Path(path)
+        if not directory.is_dir():
+            raise SchemaError(f"schema 目录不存在: {directory}")
+        loaded: list[str] = []
+        for file in sorted(directory.glob("*.yaml")):
+            schema = StateSchema.from_yaml(file, types=types)
+            if self.register(schema):
+                loaded.append(schema.name)
+        return loaded
+
+    def get(self, name: str) -> StateSchema:
+        """按名取回 schema,缺失时给出带候选清单的清晰错误。"""
+        try:
+            return self._schemas[name]
+        except KeyError:
+            known = ", ".join(self.names()) or "<空>"
+            raise SchemaError(f"schema {name!r} 未注册;已登记: {known}") from None
+
+
+# 全局默认注册表,供场景方 load_dir()、engine/spec.py 解析 schema 名时共享。
+default_registry = SchemaRegistry()

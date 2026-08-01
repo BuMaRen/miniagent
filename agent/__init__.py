@@ -14,7 +14,7 @@ Agent = LLM Client + ToolRegistry + ToolSets(工具集) + Memory。
 """
 
 from agent.agent import Agent
-from agent.toolset import ToolSet
+from agent.toolset import ToolSet, ToolSetRegistry
 from agent.memory import ConversationMemory
 
-__all__ = ["Agent", "ToolSet", "ConversationMemory"]
+__all__ = ["Agent", "ToolSet", "ToolSetRegistry", "ConversationMemory"]

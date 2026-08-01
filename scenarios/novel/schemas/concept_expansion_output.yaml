@@ -1,0 +1,7 @@
+# "立意扩展"阶段(stages.py 的 concept_expansion)的 output_schema。
+name: concept_expansion_output
+definition:
+  story_bible.meta:
+    logline: str
+    theme: str
+    core_conflict: str

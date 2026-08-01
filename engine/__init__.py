@@ -10,6 +10,11 @@
     Node        —— 所有可执行节点的统一协议(Stage 与各控制流原语都实现它)
     RunContext  —— 一次运行贯穿始终的上下文(持有 StateStore / Checkpoint 处理器等)
     Workflow    —— 由 Node 组成的完整流程,可执行
+    build_node_registry —— 从声明式定义(stages.yaml)建出全部节点(见 engine/spec.py)
+
+注意 engine/spec.py 会 import agent/(它要现场装配 Agent),所以从 engine 这个
+包名导入它会一并拉起 agent/llm/tools 三个包;不需要声明式定义的调用方直接从
+engine.stage / engine.workflow 导入即可,不会付这份代价。
 """
 
 from engine.stage import Stage, Node
