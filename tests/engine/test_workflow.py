@@ -135,6 +135,21 @@ class NodeRegistryTests(unittest.TestCase):
             registry.get("nope")
         self.assertIn("s1", str(ctx_mgr.exception))
 
+    def test_replace_swaps_the_node_and_returns_the_previous_one(self):
+        # 典型用法:按声明式定义建好节点后,场景侧在外面包一层(见
+        # scenarios/novel/stages.py 给评审节点补的状态写回)。
+        registry = NodeRegistry()
+        original = Stage(name="s1", executor=lambda ctx, inputs: inputs)
+        registry.register(original)
+        wrapper = Stage(name="s1", executor=lambda ctx, inputs: {"wrapped": True})
+        self.assertIs(registry.replace(wrapper), original)
+        self.assertIs(registry.get("s1"), wrapper)
+
+    def test_replace_requires_the_name_to_exist(self):
+        registry = NodeRegistry()
+        with self.assertRaises(KeyError):
+            registry.replace(Stage(name="nope", executor=lambda ctx, inputs: inputs))
+
 
 class FromSpecTests(unittest.TestCase):
     def setUp(self):

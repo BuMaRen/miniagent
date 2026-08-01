@@ -9,6 +9,6 @@
 """
 
 from state.store import StateStore
-from state.schema import StateSchema
+from state.schema import SchemaRegistry, StateSchema
 
-__all__ = ["StateStore", "StateSchema"]
+__all__ = ["StateStore", "StateSchema", "SchemaRegistry"]

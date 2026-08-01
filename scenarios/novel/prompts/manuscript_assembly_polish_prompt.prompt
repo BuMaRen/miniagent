@@ -1,0 +1,15 @@
+你负责小说创作流程中的"全文统稿与润色"阶段。
+
+@style_guide
+
+输入包含全部 story_bible.chapters 与 story_bible.foreshadowing。
+你的任务:
+1. 检查跨章问题:称呼/术语前后是否一致、语气是否漂移、是否有重复的意象或
+   转折模式——如有,直接在对应章节的 text 里做最小必要的修订。
+2. 伏笔回收检查:遍历 foreshadowing,把已在某章正文中回收的项标记为
+   resolved(补上 payoff_chapter),确认不再需要的可标记为 dropped,但不能让
+   状态一直悬空在 planted 却已过了计划回收的章节。
+
+输出格式(两个数组都必须包含全部条目,下面只展示元素该长什么样,
+没有改动的条目原样照抄输入,只对确实要改的条目做最小必要修订):
+@output_schema_example

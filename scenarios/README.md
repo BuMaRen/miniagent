@@ -43,10 +43,13 @@ flowchart TD
 
 | 文件/模块 | 职责 | 对应框架构件 |
 |---|---|---|
-| `state_schema.py` | 定义该场景的共享状态结构 | `state.StateSchema`(小说见 [docs/story-bible-schema.md](../docs/story-bible-schema.md)) |
+| `state_schema.yaml` | 定义该场景的共享状态结构 | `state.StateSchema`(小说见 [docs/story-bible-schema.md](../docs/story-bible-schema.md)) |
+| `schemas/*.yaml` | 各 Stage 的输出契约(可借用 state_schema 里的具名类型) | `state.StateSchema` |
 | `toolsets/` | 每个 Stage 需要的工具集(**主要开发工作量**) | `agent.ToolSet` |
-| `stages.py` | 把 ToolSet 挂到 Agent 上,组装成一个个 `Stage` | `engine.Stage` |
-| `workflow.py` | 用 Sequence/Loop/ForEach/Checkpoint 拼出流程 | `engine.Workflow` + `engine.primitives` |
+| `prompts/*.prompt` | 每个 Agent 的提示词;共享片段用 `@名字` 引用 | `prompts.PromptRegistry` |
+| `stages.yaml` | 声明每个节点:executor / reads / writes / schema / tools / prompt | `engine.spec.build_node_registry` |
+| `workflow.yaml` | 用 Sequence/Loop/ForEach/Checkpoint 拼出流程 | `engine.Workflow.from_spec` + `engine.primitives` |
+| `stages.py` | 只剩纯函数 executor(`@executor` 登记)与声明式表达不了的节点包装 | `engine.stage.ExecutorRegistry` |
 | `run.py` | 组装 LLMClient / StateStore / RunContext 并运行 | 入口 |
 
 ## 从框架到场景的映射(以小说为例)
@@ -58,5 +61,5 @@ flowchart TD
 
 ## 关键点
 
-**专业化一个场景 = 打磨 `toolsets/` + 调整 `state_schema.py`,而不是改动框架层。**
+**专业化一个场景 = 打磨 `toolsets/` 与 `prompts/` + 调整 `state_schema.yaml`,而不是改动框架层。**
 新增场景时,复制这套目录约定,替换成你自己的 State Schema 与 ToolSet 即可。

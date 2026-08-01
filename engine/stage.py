@@ -65,12 +65,17 @@ class ExecutorRegistry:
         """移除一个 executor(重名登记前先卸载,或热替换时会用到)。"""
         self._executors.pop(name, None)
 
+    def names(self) -> list[str]:
+        """已登记的全部 executor 名(排序后),用于报错时列出候选。"""
+        return sorted(self._executors)
+
     def get(self, name: str) -> Executor:
-        """按名取回 executor,缺失时给出清晰错误。"""
+        """按名取回 executor,缺失时给出带候选清单的清晰错误。"""
         try:
             return self._executors[name]
         except KeyError:
-            raise KeyError(f"Executor '{name}' 未注册") from None
+            known = ", ".join(self.names()) or "<空>"
+            raise KeyError(f"Executor '{name}' 未注册;已登记: {known}") from None
 
 
 # 全局默认注册表,供场景侧用 @executor 装饰器登记。

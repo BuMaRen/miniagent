@@ -3,7 +3,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from state.schema import ANY, OneOf, Optional, SchemaError, StateSchema, load_types
+from state.schema import (
+    ANY,
+    OneOf,
+    Optional,
+    SchemaError,
+    SchemaRegistry,
+    StateSchema,
+    load_types,
+)
 
 
 class ValidateTests(unittest.TestCase):
@@ -412,6 +420,58 @@ class ToPromptExampleTests(unittest.TestCase):
     def test_none_definition_yields_empty_object(self):
         schema = StateSchema("s", None)
         self.assertEqual(schema.to_prompt_example(), "{}")
+
+
+class SchemaRegistryTests(unittest.TestCase):
+    """按名检索 schema——stages.yaml 里 `output_schema: critic_output` 就是走这张表。"""
+
+    def setUp(self):
+        self.registry = SchemaRegistry()
+        self.schema = StateSchema("critic_output", {"needs_revision": bool})
+
+    def test_register_then_get_by_name(self):
+        self.assertTrue(self.registry.register(self.schema))
+        self.assertIs(self.registry.get("critic_output"), self.schema)
+
+    def test_duplicate_register_returns_false_and_keeps_the_first(self):
+        self.registry.register(self.schema)
+        self.assertFalse(self.registry.register(StateSchema("critic_output", {"x": int})))
+        self.assertIs(self.registry.get("critic_output"), self.schema)
+
+    def test_unknown_name_reports_the_registered_ones(self):
+        self.registry.register(self.schema)
+        with self.assertRaises(SchemaError) as caught:
+            self.registry.get("nope")
+        self.assertIn("critic_output", str(caught.exception))
+
+    def test_load_dir_compiles_every_yaml_with_the_shared_types(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "shared.yaml").write_text(
+                "types:\n  point:\n    x: int\n    y: int\ndefinition:\n  origin: !type point\n",
+                encoding="utf-8",
+            )
+            # 名字取文件里的 name:,没写就取文件名;!type 引用的是外部注入的类型表。
+            (directory / "output.yaml").write_text(
+                "name: stage_output\ndefinition:\n  where: !type point\n", encoding="utf-8"
+            )
+            types = load_types(directory / "shared.yaml")
+            # 返回的是 schema 名(按文件名顺序:output.yaml 先于 shared.yaml)。
+            self.assertEqual(self.registry.load_dir(directory, types=types), ["stage_output", "shared"])
+        self.registry.get("stage_output").validate({"where": {"x": 1, "y": 2}})
+        with self.assertRaises(SchemaError):
+            self.registry.get("stage_output").validate({"where": {"x": "no"}})
+
+    def test_load_dir_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "one.yaml").write_text("definition:\n  x: int\n", encoding="utf-8")
+            self.assertEqual(self.registry.load_dir(directory), ["one"])
+            self.assertEqual(self.registry.load_dir(directory), [])
+
+    def test_missing_dir_is_an_error(self):
+        with self.assertRaises(SchemaError):
+            self.registry.load_dir("/nonexistent/schemas")
 
 
 if __name__ == "__main__":

@@ -485,3 +485,61 @@ class StateSchema:
             else:
                 raise SchemaError(f"{here}: 路径超出了 schema 结构(在标量/枚举处继续下钻)")
         return desc
+
+
+class SchemaRegistry:
+    """"schema 名 -> StateSchema"的登记表,与 tools.registry.ToolRegistry 同构。
+
+    为的是让 stages.yaml 里能用一个裸字符串引用 schema(`output_schema:
+    critic_output`)——schema 本身是对象,YAML 里只写得下它的名字。
+    """
+
+    def __init__(self) -> None:
+        self._schemas: dict[str, StateSchema] = {}
+
+    def register(self, schema: StateSchema) -> bool:
+        """登记一份 schema(key 取 schema.name);遇到重名返回 False,否则返回 True。"""
+        if schema.name in self._schemas:
+            return False
+        self._schemas[schema.name] = schema
+        return True
+
+    def unregister(self, name: str) -> None:
+        """移除一份 schema(重名登记前先卸载,或热替换时会用到)。"""
+        self._schemas.pop(name, None)
+
+    def names(self) -> list[str]:
+        """已登记的全部 schema 名(排序后),用于报错时列出候选。"""
+        return sorted(self._schemas)
+
+    def load_dir(self, path: str | Path, types: dict[str, Any] | None = None) -> list[str]:
+        """把一个目录下的全部 `*.yaml` 当作 schema 声明登记进来,返回登记到的名字。
+
+        每个文件走已有的 StateSchema.from_yaml(path, types=types),名字取文件里的
+        `name:`(缺省是文件名)。types 是跨文件复用的具名类型表(见 load_types),
+        整目录共用一份——场景方各 Stage 的 output_schema 往往都要借用同一批子结构。
+
+        重复调用是幂等的(已登记的同名 schema 跳过),因此场景方可以在每次
+        build_node_registry 时无脑调一次。
+        """
+        directory = Path(path)
+        if not directory.is_dir():
+            raise SchemaError(f"schema 目录不存在: {directory}")
+        loaded: list[str] = []
+        for file in sorted(directory.glob("*.yaml")):
+            schema = StateSchema.from_yaml(file, types=types)
+            if self.register(schema):
+                loaded.append(schema.name)
+        return loaded
+
+    def get(self, name: str) -> StateSchema:
+        """按名取回 schema,缺失时给出带候选清单的清晰错误。"""
+        try:
+            return self._schemas[name]
+        except KeyError:
+            known = ", ".join(self.names()) or "<空>"
+            raise SchemaError(f"schema {name!r} 未注册;已登记: {known}") from None
+
+
+# 全局默认注册表,供场景方 load_dir()、engine/spec.py 解析 schema 名时共享。
+default_registry = SchemaRegistry()

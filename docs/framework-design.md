@@ -220,15 +220,9 @@ stages:
           max_iterations: 2
 
   - sequence: [stage_e, stage_f]
-
-toolsets:
-  stage_a: [toolset_x]
-  stage_c: [toolset_y, toolset_z]
-  stage_d: [toolset_w]
-  # ...每个 Stage 的 executor(Agent)挂载哪些 ToolSet
 ```
 
-这份定义完全没有出现"大纲""章节""小说"这类词——它是纯结构。小说生成工作流就是往这个结构里填入具体的 Stage、ToolSet 和 State Schema 之后得到的一个实例。
+这份定义完全没有出现"大纲""章节""小说"这类词——它是纯结构:它只说"这些节点怎么串",不说"每个节点是什么"。后者是 §7.2 那份 `stages.yaml` 的职责。小说生成工作流就是往这两个结构里填入具体的 Stage、ToolSet 和 State Schema 之后得到的一个实例。
 
 ### 7.1 model —— 按子树指定模型
 
@@ -251,6 +245,42 @@ stages:
 
 子节点没有自己标注 `model` 时,继承最近的祖先节点声明的值,一路向下直到某个子节点自己覆盖为止;从未被任何祖先标注过的叶子 Stage,退回场景方 `client_factory` 的默认模型。这件事由 `engine.workflow.Workflow.resolve_stage_models` 在 Stage 对象真正被构造之前完成一次轻量的树形扫描(必须在那之前,因为 Stage 内部的 `LLMClient` 一旦造好就定死了),产出一份 `{stage 名: model}` 映射,交给场景方在 `client_factory(stage_name, model)` 里按 `model` 选择/复用对应的 Provider client(见 `scenarios/novel/run.py` 的 `make_client_factory`)——引擎本身不关心某个模型名具体对应哪个 Provider 的 SDK,那仍是场景方 `client_factory` 的职责。
 
+### 7.2 Node 的声明式定义 —— `stages.yaml`
+
+`workflow.yaml` 说"节点怎么串",`stages.yaml` 说"每个节点是什么":谁执行、读写哪些状态切片、输出要符合哪份契约。两份都由框架解析(`engine/spec.py` 的 `build_node_registry`),场景侧因此不必再手写 `build_xxx_stage()` 这类装配胶水。
+
+```yaml
+defaults:                       # 可选:合并进每个 agent executor 的缺省字段
+  executor:
+    max_steps: 8
+
+stage_a:                        # ① executor 是字符串 -> 按名查 ExecutorRegistry
+  executor: stage_a_executor    #    (场景侧用 @executor 装饰器登记的普通函数)
+  writes: [some.path]
+
+stage_c:                        # ② executor 是 dict -> 现场装配一个 Agent
+  executor:
+    model: <可选,见 §7.1>
+    tools: [toolset_y, toolset_z]     # 按名查 ToolSetRegistry
+    output_schema: stage_c_output     # 按名查 SchemaRegistry
+    prompt: "@stage_c_prompt"         # 按名查 PromptRegistry
+  reads: [some.path]
+  writes: [other.path]
+
+confirm_before_continue:        # ③ checkpoint -> 人工断点
+  checkpoint:
+    prompt: 请确认……
+    resume_input_schema: critic_output
+```
+
+**引用规则**:`executor`/`output_schema`/`tools` 的值本身是对象,YAML 里写得下的只有名字,所以裸字符串一律视为"去对应注册表按名检索";`prompt` 的值本身就是文本,裸字符串没法区分正文与名字,所以引用要显式写成 `"@名字"`。⚠️ `@` 是 YAML 的保留指示符,**必须加引号**,否则 `yaml.safe_load` 直接报错。
+
+**提示词**放在磁盘上的 `*.prompt` 文件里(`prompts/` 包扫描整目录登记)。正文里独占一行的 `@其它提示词名` 会被替换成那段提示词的正文,共享片段(风格基调、通用约束)因此只写一份;`@output_schema_example` 这个占位符则由框架用该节点 `output_schema` 的示例 JSON 填上,提示词里不必手抄一份格式说明(没写这个占位符时,框架把它追加到提示词末尾)。
+
+**model 的优先级**:`workflow.yaml` 上标注/继承下来的(编排层)优先于 `stages.yaml` 里节点自带的默认值;两处都没有时传给 `client_factory` 的 model 为 `None`。
+
+声明式定义表达不了的东西(比如某个评审节点在过审后还要旁路写回一段状态),仍然可以在场景侧用 Python 处理:先按 `stages.yaml` 建出节点,再用 `NodeRegistry.replace()` 把它换成一个包了一层的 Node——包装体同样只需满足 Node 协议(见 §3.1、§6.5)。
+
 ## 8. 二次开发指南
 
 要在这套框架上做出一个"专业地生产 X"的具体场景,典型步骤:
@@ -261,7 +291,8 @@ stages:
 4. **识别需要对列表重复处理的环节**(如"逐章"/"逐条"),套一层 `ForEach`。
 5. **决定哪些节点需要人工介入**,插入 `Checkpoint`;如果人工审阅该落在某个已有 `Loop` 的评审环节里(而不是生成完之后再单独确认),直接把它加在该 `Loop` 的 `body` 末尾——排在 AI critic 之后,于是 AI 判否时它会被短路跳过,而它自己判否时同样驱动下一轮重写。
 6. **为每个 Stage 开发/挂载 ToolSet**——这是主要的开发工作量所在,流程结构(2–5 步)通常一次设计好之后很少再变。
-7. 组装成 Workflow 定义并运行。
+7. 把 2–6 步的结论写成两份声明:`stages.yaml`(每个节点是什么,见 §7.2)与 `workflow.yaml`(节点怎么串,见 §7);提示词落在 `prompts/*.prompt`、输出契约落在 `schemas/*.yaml`。场景侧的 Python 只剩纯函数 executor、ToolSet,以及声明式表达不了的那点副作用。
+8. 组装 LLMClient / StateStore / RunContext 并运行。
 
 ## 9. 已验证的实例:小说生成
 
