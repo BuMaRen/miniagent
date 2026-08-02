@@ -1,0 +1,21 @@
+.git
+.venv
+.claude
+.vscode
+__pycache__
+**/__pycache__
+*.pyc
+
+# 场景产物/备份,跑镜像时不需要,体积也不小
+scenarios/*/output
+scenarios/*/backups
+scenarios/*/*.mhtml
+scenarios/*/*.backup.tar.gz
+
+# site 运行时数据,不应该打进镜像
+site/runs
+
+tests
+docs
+drafted.md
+TodoList.md

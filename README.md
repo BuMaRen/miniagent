@@ -42,7 +42,7 @@ miniagent/
 ├── llm/                        # LLM 抽象层
 │   ├── client.py               #   LLMClient 接口 + ChatResponse
 │   ├── message.py              #   Message / ToolCall 标准结构
-│   └── providers/openai.py     #   OpenAI 兼容实现
+│   └── providers/               #   OpenAI / Anthropic / 智谱(zai-sdk)实现
 │
 ├── tools/                      # 工具系统
 │   ├── schema.py               #   ToolSchema + schema_from_func(自动生成)
@@ -71,7 +71,21 @@ miniagent/
 python3 -m unittest discover -s tests -t .
 ```
 
-`tests/llm/test_openai_provider.py`、`tests/llm/test_anthropic_provider.py` 覆盖两个 Provider 的消息格式转换;若未安装 `openai`/`anthropic`(`requirements.txt` 里的两个依赖),这两个文件会自动跳过而非报错。
+`tests/llm/test_openai_provider.py`、`tests/llm/test_anthropic_provider.py`、`tests/llm/test_zhipu_provider.py` 覆盖三个 Provider 的消息格式转换;若未安装对应的 `openai`/`anthropic`/`zai-sdk`(`requirements.txt` 里的三个依赖),对应的文件会自动跳过而非报错。
+
+## 部署(Docker)
+
+`short` 场景的 Web 生产界面([site/](site/README.md))打包成了一个镜像,默认启动命令就是这个
+服务:
+
+```bash
+docker build -t miniagent-short .
+docker run -p 8000:8000 -v $(pwd)/site/runs:/app/site/runs miniagent-short
+```
+
+浏览器打开 `http://<宿主机IP>:8000/` 即可。挂载 `site/runs` 卷是为了让每次生成的产物在容器重启后
+还能找回;不挂载也能跑,只是容器销毁后产物一起没了。API Key 等连接信息在网页里填,不需要传进
+容器的环境变量。
 
 ## 二次开发一个新场景
 

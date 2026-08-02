@@ -73,8 +73,8 @@ def _clear_resume_point(state_path: Path) -> None:
     _resume_path(state_path).unlink(missing_ok=True)
 
 
-_PROVIDER_DEFAULT_MODEL = {"anthropic": "claude-sonnet-latest", "openai": "gpt-4o"}
-_PROVIDER_API_KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+_PROVIDER_DEFAULT_MODEL = {"anthropic": "claude-sonnet-latest", "openai": "gpt-4o", "zhipu": "glm-5.2"}
+_PROVIDER_API_KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "zhipu": "ZHIPU_API_KEY"}
 
 
 def _infer_provider(model: str) -> str:
@@ -82,10 +82,14 @@ def _infer_provider(model: str) -> str:
 
     model 与 Provider 是绑死的、不是"哪个 API Key 存在就用哪个"能替代的关系——
     claude-* 系列模型只能经 Anthropic 的 Messages API 调用,发去 OpenAI 兼容
-    接口只会得到一个牛头不对马嘴的报错。目前只接入了这两家 Provider,claude-*
-    走 Anthropic,其余(gpt-*/o1-* 等)按现有约定走 OpenAI 兼容协议。
+    接口只会得到一个牛头不对马嘴的报错。目前接入了三家 Provider,claude-* 走
+    Anthropic,glm-* 走智谱,其余(gpt-*/o1-* 等)按现有约定走 OpenAI 兼容协议。
     """
-    return "anthropic" if model.startswith("claude") else "openai"
+    if model.startswith("claude"):
+        return "anthropic"
+    if model.startswith("glm"):
+        return "zhipu"
+    return "openai"
 
 
 def build_llm_client(model: str | None = None, log_dir: Path | None = None) -> LLMClient:
@@ -108,9 +112,11 @@ def build_llm_client(model: str | None = None, log_dir: Path | None = None) -> L
         provider = "anthropic"
     elif os.environ.get("OPENAI_API_KEY"):
         provider = "openai"
+    elif os.environ.get("ZHIPU_API_KEY"):
+        provider = "zhipu"
     else:
         raise RuntimeError(
-            "需要设置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY 才能真实运行本场景;"
+            "需要设置 ANTHROPIC_API_KEY / OPENAI_API_KEY / ZHIPU_API_KEY 之一才能真实运行本场景;"
             "没有 API Key 时,可运行 `python -m scenarios.novel.offline_demo` "
             "用脚本化回复体验完整流水线(见 scenarios/novel/README.md)。"
         )
@@ -128,9 +134,18 @@ def build_llm_client(model: str | None = None, log_dir: Path | None = None) -> L
         from llm.providers.anthropic import AnthropicClient
 
         client: LLMClient = AnthropicClient(
-            api_key=api_key, 
-            model=resolved_model, 
+            api_key=api_key,
+            model=resolved_model,
             base_url=os.environ.get("ANTHROPIC_API_BASE_URL", "http://localhost:11434/v1"),
+            max_tokens=32768,
+        )
+    elif provider == "zhipu":
+        from llm.providers.zhipu import ZhipuClient
+
+        client = ZhipuClient(
+            api_key=api_key,
+            model=resolved_model,
+            base_url=os.environ.get("ZHIPU_API_BASE_URL"),
             max_tokens=32768,
         )
     else:

@@ -1,0 +1,62 @@
+# 短篇网文生成流程的声明式定义 —— 只描述结构,节点实现在 stages.py。
+#
+# 与 scenarios/novel 的结构性差别:全程没有 Checkpoint(人工不参与审核),
+# 因此两个 Loop 的 on_exceed 都是 accept_last_version 而不是升级人工裁决 ——
+# 没有人在等着裁决时,escalate 只会把流程卡死。跑满轮次仍不合格的小节会被
+# 放行,但 final_qa 会把它残留的问题写进 qa_report(见 stages.final_qa_executor),
+# 成品交付时一眼可见哪几节需要人再看一下。
+#
+# model 是可选字段,与原语关键字同级出现:标注后本节点及其全部子节点都用这个
+# 模型,除非子节点自己也标了 model。这里一个都不标 —— 场景本身对模型没有偏好,
+# 用哪个由 run.py 的 --model / SHORT_MODEL 环境变量统一决定。
+workflow: short_story_generation
+state_schema: short_story
+
+stages:
+  # 用户设定校验(纯函数)-> 故事骨架与角色。
+  - sequence:
+      - input_parsing
+      - story_design
+
+  # 大纲一轮 = 生成 + 评审。评审判否时 continue_when 为真,从 outline_generation
+  # 重开一轮;上一轮为什么没过,由引擎发布在 _loop.outline_loop.last 里,
+  # outline_generation 用普通的 reads 读它(见 stages.OUTLINE_LOOP_LAST_PATH)。
+  # 只留 2 轮:大纲返工比正文返工便宜,但也就值一次重来 —— 剧情与爆点的骨架
+  # 在这里定死,后面不再有全局性的返工机会。
+  - loop:
+      name: outline_loop
+      continue_when: _loop.outline_loop.last.needs_revision
+      max_iterations: 2
+      body:
+        - outline_generation
+        - outline_critic
+      on_exceed: accept_last_version
+
+  # 逐节生产:撰写(管情节与爽点)-> 精修(只管语言)。**刻意没有审校循环**。
+  #
+  # 本场景不追求产品级质量,只要剧情立得住、没有语病和红线问题即可,所以正文
+  # 这一层不留"重写"的余地:一节固定 2 次调用 —— 撰写一次,校对一次。校对
+  # 只改语病/错别字/标点/AI 腔,不碰情节(见 prompts.SECTION_POLISH),所以
+  # 返工的代价是固定的,不会把这一节的爆点重新赌一遍。
+  #
+  # 为什么删掉 section_critic 而不是把它留在一轮的 Loop 里:Loop 只跑一轮时,
+  # 审校判否也没有下一轮可以重写,那次调用改变不了任何产出,纯是等待与费用。
+  # 想把质量换回来时,把下面这段注释换上来即可(节点仍在 stages.py 里登记着):
+  #
+  #   body:
+  #     loop:
+  #       name: section_review_loop
+  #       continue_when: _loop.section_review_loop.last.needs_revision
+  #       max_iterations: 2
+  #       body: [section_drafting, section_polish, section_critic]
+  #       on_exceed: accept_last_version
+  - foreach:
+      name: section_loop
+      items_path: short_story.sections
+      body:
+        sequence:
+          - section_drafting
+          - section_polish
+
+  # 终检(纯函数):补全字数统计,产出 qa_report。
+  - final_qa
