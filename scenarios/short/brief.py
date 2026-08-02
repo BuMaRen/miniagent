@@ -61,7 +61,7 @@ BRIEF_FIELDS: tuple[BriefField, ...] = (
         "target_word_count", False, DEFAULT_TARGET_WORD_COUNT, "range",
         f"目标总字数区间 [下限, 上限],需落在 [{MIN_TARGET_WORDS}, {MAX_TARGET_WORDS}] 内",
     ),
-    BriefField("section_count", False, 0, "int", "希望分成几节;填 0 表示由大纲阶段自己决定(4-10 节)"),
+    BriefField("section_count", False, 4, "int", "希望分成几节;留空默认 4 节,也可填 0 表示由大纲阶段自己决定(4-10 节)"),
 )
 
 _FIELDS_BY_NAME = {f.name: f for f in BRIEF_FIELDS}

@@ -101,21 +101,30 @@ def outline_problems(
     return problems
 
 
-def section_length_problem(word_count: int, word_budget: int, tolerance: float = 0.25) -> str | None:
+def section_length_problem(
+    word_count: int,
+    word_budget: int,
+    under_tolerance: float = 0.1,
+    over_tolerance: float = 0.25,
+) -> str | None:
     """检查一节正文的字数是否偏离预算太多;没问题返回 None。
 
-    容差默认 ±25%:小说不是填空题,硬卡到个位数只会逼模型注水或砍情节;但偏离
-    过半就会让总字数失控 —— 短篇的总量本来就是靠各节预算加起来兜住的。
+    下限比上限卡得更紧(默认 -10% / +25%):写多了可以删,读者感受不到;写少了
+    是硬伤——情节被压缩、铺垫被跳过,读者能直接感觉到"没写够"，而且短篇的总
+    字数下限是用户设定里的硬性要求(见 brief.py 的 target_word_count),不能靠
+    "大部分小节达标、个别小节欠一点"来蒙混过关。上限留足空间是因为小说不是
+    填空题,硬卡到个位数只会逼模型注水凑字数。
 
     Args:
-        word_count:  实际汉字数。
-        word_budget: 该节的字数预算。
-        tolerance:   允许的相对偏差。
+        word_count:      实际汉字数。
+        word_budget:     该节的字数预算。
+        under_tolerance: 允许低于预算的相对幅度。
+        over_tolerance:  允许高于预算的相对幅度。
     """
     if word_budget <= 0:
         return None
-    low = int(word_budget * (1 - tolerance))
-    high = int(word_budget * (1 + tolerance))
+    low = int(word_budget * (1 - under_tolerance))
+    high = int(word_budget * (1 + over_tolerance))
     if word_count < low:
         return f"本节 {word_count} 字,低于预算 {word_budget} 字的下限 {low} 字,请补足(展开描写与铺垫,不要注水)。"
     if word_count > high:

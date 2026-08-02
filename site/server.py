@@ -43,8 +43,16 @@ from scenarios.short.brief import BRIEF_FIELDS, parse_brief  # noqa: E402
 STATIC_DIR = Path(__file__).with_name("static")
 RUNS_DIR = Path(__file__).with_name("runs")
 
-_PROVIDER_API_KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
-_PROVIDER_BASE_URL_ENV = {"anthropic": "ANTHROPIC_API_BASE_URL", "openai": "OPENAI_API_BASE_URL"}
+_PROVIDER_API_KEY_ENV = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "zhipu": "ZHIPU_API_KEY",
+}
+_PROVIDER_BASE_URL_ENV = {
+    "anthropic": "ANTHROPIC_API_BASE_URL",
+    "openai": "OPENAI_API_BASE_URL",
+    "zhipu": "ZHIPU_API_BASE_URL",
+}
 
 STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -56,7 +64,11 @@ STATIC_FILES = {
 
 def _infer_provider(model: str) -> str:
     """与 scenarios/short/run.py 里同名函数保持一致的判定规则。"""
-    return "anthropic" if model.startswith("claude") else "openai"
+    if model.startswith("claude"):
+        return "anthropic"
+    if model.startswith("glm"):
+        return "zhipu"
+    return "openai"
 
 
 # ---------------------------------------------------------------------------

@@ -56,6 +56,25 @@ class _FakeClient(LLMClient):
         )
 
 
+class _SequencedFakeClient(LLMClient):
+    """依次循环吐出一串回复(吐完从头再来),用来模拟"先判否、再判过"这类
+    跨调用变化的场景 —— _FakeClient 每次都吐同一份,测不出这种时序行为。
+    循环而不是吐完就卡在最后一份,是为了让 ForEach 里的每一节都独立经历一次
+    完整的"判否 -> 判过",而不是只有第一节触发重开一轮。
+    """
+
+    def __init__(self, payloads: list[dict[str, Any]]) -> None:
+        self._payloads = payloads
+        self.calls: list[list[Message]] = []
+
+    def chat(self, messages, tools=None, response_schema=None, **params) -> ChatResponse:
+        self.calls.append(list(messages))
+        payload = self._payloads[(len(self.calls) - 1) % len(self._payloads)]
+        return ChatResponse(
+            message=Message(role="assistant", content=json.dumps(payload, ensure_ascii=False))
+        )
+
+
 def _payloads() -> dict[str, dict[str, Any]]:
     return {
         "story_design": {
@@ -136,15 +155,12 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(report["in_target_range"], report)
         self.assertEqual(report["remaining_style_violations"], [])
 
-    def test_each_section_costs_exactly_two_calls(self):
-        # 一节固定"撰写一次 + 校对一次":校对每节都跑,因为语病与错别字是确定性
-        # 体检看不见、又不肯让步的那条红线;但它只改语言,不会重写。
+    def test_each_section_passes_review_on_the_first_try(self):
+        # 撰写固定一次(情节定死后不再重赌);精修/审校一旦过关就不再重来,
+        # 假 Critic 首轮就判过,所以三者都恰好是一次。
         self.assertEqual(len(self.clients["section_drafting"].calls), _SECTION_COUNT)
         self.assertEqual(len(self.clients["section_polish"].calls), _SECTION_COUNT)
-
-    def test_section_critic_is_not_wired_into_the_default_flow(self):
-        # 默认流程里正文层没有返工轮次,审校的判否无处可去,所以它不该被调用。
-        self.assertEqual(self.clients["section_critic"].calls, [])
+        self.assertEqual(len(self.clients["section_critic"].calls), _SECTION_COUNT)
 
     def test_outline_loop_passes_in_one_round_when_nothing_asks_for_revision(self):
         self.assertEqual(len(self.clients["outline_generation"].calls), 1)
@@ -218,6 +234,46 @@ class ShortDraftIsRescuedByPolishTests(unittest.TestCase):
         report = self.outputs["qa_report"]
         self.assertEqual(report["section_count"], _SECTION_COUNT)
         self.assertIn("in_target_range", report)
+
+
+class SectionReviewLoopRetriesOnRevisionTests(unittest.TestCase):
+    """section_review_loop 判否时应该从 section_polish 重开一轮,并把驳回理由
+    带给下一次精修 —— 而不是原样放行、也不是重新撰写(情节不该被重赌)。
+    """
+
+    def setUp(self):
+        payloads = _payloads()
+        self.clients = {
+            name: _FakeClient(payload) for name, payload in payloads.items() if name != "section_critic"
+        }
+        # 循环吐"判否(带具体意见)-> 判过",每一节都独立经历一次完整的返工。
+        self.clients["section_critic"] = _SequencedFakeClient(
+            [
+                {"needs_revision": True, "feedback": "第二段的对话腔调太生硬,请重新组织。"},
+                {"needs_revision": False, "feedback": ""},
+            ]
+        )
+        workflow = build_workflow(client_factory=lambda name, _model: self.clients[name])
+        self.store = InMemoryStateStore()
+        self.store.load(empty_state())
+        self.outputs = workflow.run(RunContext(state=self.store), parse_brief({"premise": "随便一个题材"}))
+
+    def test_drafting_runs_once_but_polish_and_critic_run_twice_per_section(self):
+        self.assertEqual(len(self.clients["section_drafting"].calls), _SECTION_COUNT)
+        self.assertEqual(len(self.clients["section_polish"].calls), _SECTION_COUNT * 2)
+        self.assertEqual(len(self.clients["section_critic"].calls), _SECTION_COUNT * 2)
+
+    def test_first_polish_call_has_no_feedback_yet(self):
+        first_call_payload = self.clients["section_polish"].calls[0][-1].content
+        self.assertIn(f'"{prompts.KEY_FEEDBACK}": ""', first_call_payload)
+
+    def test_second_polish_call_sees_the_critics_feedback(self):
+        second_call_payload = self.clients["section_polish"].calls[1][-1].content
+        self.assertIn("对话腔调太生硬", second_call_payload)
+
+    def test_the_section_still_ends_up_polished(self):
+        for section in self.store.get("short_story.sections"):
+            self.assertEqual(section["status"], "polished")
 
 
 class ContentAgnosticTests(unittest.TestCase):

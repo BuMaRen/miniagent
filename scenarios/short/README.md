@@ -34,10 +34,18 @@ python -m scenarios.short.run --show-fields
 
 # 2. 改 scenarios/short/brief.yaml(只有 premise 必填,其余留空 = 由模型决定)
 
-# 3. 跑
+# 3. 跑(OpenAI 兼容协议,如阿里云百炼)
 export OPENAI_API_KEY=sk-...
 export SHORT_MODEL=qwen3.7-max
 export OPENAI_API_BASE_URL=https://.../compatible-mode/v1
+python -m scenarios.short.run --output-dir scenarios/short/output --log-chats
+```
+
+也可以用智谱(GLM 系列,`glm-` 开头的模型名会自动路由到智谱协议):
+
+```bash
+export ZHIPU_API_KEY=...
+export SHORT_MODEL=glm-5.2
 python -m scenarios.short.run --output-dir scenarios/short/output --log-chats
 ```
 
@@ -57,22 +65,24 @@ flowchart TD
     D --> E{outline_critic}
     E -- 判否,最多重来 1 次 --> D
     E -- 通过 --> F[foreach 每一节]
-    F --> G[section_drafting 写情节与爽点]
+    F --> G[section_drafting 写情节与爽点,只跑一次]
     G --> H[section_polish 只改语病/错别字/AI 腔]
-    H --> J{还有下一节?}
+    H --> I{section_critic}
+    I -- 判否,最多重来 1 次 --> H
+    I -- 通过 --> J{还有下一节?}
     J -- 是 --> F
     J -- 否 --> K[final_qa 字数与文风终检]
 ```
 
-没有 Checkpoint,唯一的 Loop 在大纲那一层(`on_exceed: accept_last_version` —— 没有人在等着
-裁决时,升级人工只会把流程卡死)。
+没有 Checkpoint,两层 Loop 的 `on_exceed` 都是 `accept_last_version`(没有人在等着裁决时,
+升级人工只会把流程卡死)。
 
-**正文层不留重写的余地**:一节固定两次调用 —— 撰写一次、校对一次。校对(`section_polish`)
-只改语言,不碰情节、不调段落顺序,所以返工代价是固定的,不会把这一节的爆点重新赌一遍。
-一篇 4 节的稿子总共约 **11 次调用**(1 骨架 + 1~2 大纲 + 1 大纲评审 + 4 撰写 + 4 校对)。
-
-想拿时间换质量时,把 `workflow.yaml` 里注释掉的那段审校循环换上来即可 —— `section_critic`
-节点一直在 `stages.py` 里登记着,它会让每节最多多跑一轮完整重写。
+**撰写只跑一次,精修/审校才是会重来的那一层**:情节与爽点在 `section_drafting` 定死之后
+不再重赌;`section_polish`(只改语言,不碰情节、不调段落顺序)与 `section_critic` 组成一个
+最多 2 轮的循环,判否时带着具体的驳回理由重开一轮精修,字数下限不达标也算在判否的一票
+否决里(见下一节)。一篇 4 节的稿子调用次数因此是个区间:最省是 **约 15 次**
+(1 骨架 + 1~2 大纲 + 1 大纲评审 + 4 撰写 + 4 精修 + 4 审校,每节一次过审),两轮都跑满时
+最多 **约 23 次**。
 
 ## 质量守在哪条线上
 
@@ -85,12 +95,15 @@ AI 腔。分工是:
    - 本节字数与预算的偏差、全篇总字数
    - 大纲的编号连续性、字数预算合计、爽点"先埋后放"的先后关系
 
-   大纲层算出的问题**一票否决**(`stages._merge_verdict`),模型说通过也没用;正文层算出
-   的问题变成校对节点的整改清单。阈值集中在 `style.DEFAULT_THRESHOLDS`,要松紧只改那一处。
+   大纲层与正文层算出的问题都**一票否决**(`stages._merge_verdict`),模型说通过也没用。
+   正文层多一条硬要求:字数**下限**不达标必须改(`toolsets.structure.section_length_problem`
+   对下限的容差比上限更紧,见该函数说明)——写多了能删,写少了是硬伤。阈值集中在
+   `style.DEFAULT_THRESHOLDS`,要松紧只改那一处。
 
-2. **一次校对**(`section_polish`)—— 语病、错别字、成语量词误用、标点、称呼不一致这些
-   程序看不见的硬伤,靠每节固定一次的校对扫掉。它被明确限制成"校对而非作者":没毛病
-   的句子原样保留,每一处改动都要对应到清单上的某一条。
+2. **校对 + 审校循环**(`section_polish` + `section_critic`,最多 2 轮)—— 语病、错别字、
+   成语量词误用、标点、称呼不一致这些程序看不见的硬伤,靠校对扫掉;审校判否时带着具体
+   意见退回重改,而不是靠模型自己说了算。校对被明确限制成"校对而非作者":没毛病的句子
+   原样保留,每一处改动都要对应到清单或驳回意见上的某一条,不碰情节、不调段落顺序。
 
 3. **终检如实交代**(`final_qa` → `qa_report.json`,并附在 `story.md` 末尾)—— 没有人工
    复核,成色就得写在明面上:总字数是否达标、哪几节的文风体检还有越界项。

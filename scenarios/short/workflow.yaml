@@ -32,31 +32,35 @@ stages:
         - outline_critic
       on_exceed: accept_last_version
 
-  # 逐节生产:撰写(管情节与爽点)-> 精修(只管语言)。**刻意没有审校循环**。
+  # 逐节生产:sequence 先保底跑一次撰写(管情节与爽点,只跑这一次、不进
+  # 循环——情节与爽点定死之后不再重赌),再进 section_review_loop 反复"精修
+  # (只管语言)-> 审校"直到过关或跑满轮次。这样"拿到一份初稿"这一步不受
+  # Loop 内部结构影响(Loop 本身也保证 body 至少跑一轮,见
+  # engine/primitives/loop.py,但撰写与精修/审校的职责边界不同,分开写更直白)。
   #
-  # 本场景不追求产品级质量,只要剧情立得住、没有语病和红线问题即可,所以正文
-  # 这一层不留"重写"的余地:一节固定 2 次调用 —— 撰写一次,校对一次。校对
-  # 只改语病/错别字/标点/AI 腔,不碰情节(见 prompts.SECTION_POLISH),所以
-  # 返工的代价是固定的,不会把这一节的爆点重新赌一遍。
+  # body 顺序是 [section_polish, section_critic] 而不是反过来:Loop 的短路只在
+  # continue_when 为真时跳过本轮剩下的节点(见 engine/primitives/loop.py),
+  # 判否时从 body[0]=section_polish 重开一轮;若审校放在前面,判过之后 body
+  # 还会不短路地继续往下跑,白白多跑一次精修。
   #
-  # 为什么删掉 section_critic 而不是把它留在一轮的 Loop 里:Loop 只跑一轮时,
-  # 审校判否也没有下一轮可以重写,那次调用改变不了任何产出,纯是等待与费用。
-  # 想把质量换回来时,把下面这段注释换上来即可(节点仍在 stages.py 里登记着):
-  #
-  #   body:
-  #     loop:
-  #       name: section_review_loop
-  #       continue_when: _loop.section_review_loop.last.needs_revision
-  #       max_iterations: 2
-  #       body: [section_drafting, section_polish, section_critic]
-  #       on_exceed: accept_last_version
+  # 审校发现的问题(含字数下限——这是硬要求,见
+  # toolsets.structure.section_length_problem)一票否决,不管模型自己怎么判;
+  # 精修下一轮会读到具体的驳回理由(见 stages.SECTION_REVIEW_LOOP_LAST_PATH)。
+  # 只留 2 轮:正文的返工只改语言不改情节,代价可控,但也不该无限期跑下去。
   - foreach:
       name: section_loop
       items_path: short_story.sections
       body:
         sequence:
           - section_drafting
-          - section_polish
+          - loop:
+              name: section_review_loop
+              continue_when: _loop.section_review_loop.last.needs_revision
+              max_iterations: 2
+              body:
+                - section_polish
+                - section_critic
+              on_exceed: accept_last_version
 
   # 终检(纯函数):补全字数统计,产出 qa_report。
   - final_qa

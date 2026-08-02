@@ -168,6 +168,19 @@ def _tail(sections: list[dict], current_index: Any, chars: int = 400) -> str:
     return text[-chars:]
 
 
+def _section_text(sections: list[dict], index: Any) -> str:
+    """从 sections 状态里取当前节的最新正文。
+
+    section_polish/section_critic 现在被包进 section_review_loop:Loop 每轮都
+    从同一份 inputs 重新开始(见 engine/primitives/loop.py 的说明),通道①的
+    "text" 只保真同一轮内紧邻的两个节点,跨轮次会被重置回循环最初收到的那份
+    inputs,看不到上一轮精修的结果。只有 ctx.state 是跨轮次可靠的,所以这两个
+    节点都必须从这里读正文,不能再依赖通道①。
+    """
+    section = next((s for s in sections if s.get("index") == index), None)
+    return str((section or {}).get("text") or "")
+
+
 def _story_context(state: dict[str, Any]) -> dict[str, Any]:
     """骨架 + 角色 + 爽点设计 —— 每个写作/审校节点都要看的那份全局事实。"""
     return {
@@ -337,17 +350,20 @@ def build_outline_critic_stage(client: LLMClient) -> Stage:
 # 撰写只管情节与爽点,精修只管语言 —— 两件事要的注意力不同,合成一个节点时
 # 模型总会顾此失彼(让它一边编爆点一边数句长,两头都糊)。
 #
-# 默认流程里只用前两个(workflow.yaml 的 foreach body 是一条 sequence),因为
-# 本场景不追求产品级质量:一节固定 1 次撰写 + 至多 1 次精修(体检达标就跳过)。
-# section_critic 仍然在这里实现并登记 —— 它是"愿意多花几轮换质量"时把审校循环
-# 加回 workflow.yaml 的那块拼图,不是死代码。
+# workflow.yaml 里 foreach 的 body 是 sequence([section_drafting] 保底拿到一份
+# 初稿)接一个 section_review_loop(body=[section_polish, section_critic]):
+# 精修在前、审校在后,判否就从 body[0] 重开一轮精修,判过则这一节到此为止。
+# 撰写只跑这一次、不进循环 —— 情节与爽点定死之后不再重赌;循环只反复"精修 ->
+# 审校",成本随质量需要而变,而不是像撰写那样一次性摊死。
 # ---------------------------------------------------------------------------
 
 SECTION_DRAFTING_AGENT_SCHEMA = StateSchema("section_drafting_agent_output", {"text": str, "summary": str})
 SECTION_POLISH_AGENT_SCHEMA = StateSchema("section_polish_agent_output", {"text": str, "revision_notes": str})
 
 # 两个写作节点对 Stage 的输出契约是同一份:整份 sections(交给 writes 写回)+
-# 本节 index 与正文(通过通道①直接流给 body 里的下一个节点,省一次状态读)。
+# 本节 index 与正文。text 这个通道①字段只在同一轮内紧邻的下一个节点有用
+# (调试、日志);跨 Loop 轮次的正文一律靠 _section_text() 从 state 里读,见
+# 该函数的说明。
 SECTION_WRITE_OUTPUT_SCHEMA = StateSchema(
     "section_write_output", {SECTIONS_PATH: [SECTION], "section_index": int, "text": str}
 )
@@ -433,12 +449,10 @@ def build_section_polish_stage(client: LLMClient) -> Stage:
         sections = state.get(SECTIONS_PATH) or []
         current = _current_section(state)
         index = current.get("index")
-        # 上一关(撰写)的正文通过通道①直接流进来,不必再从状态里捞一遍。
-        text = str(inputs.get("text") or "")
+        text = _section_text(sections, index)
 
-        # 正文这一层没有审校循环(见 workflow.yaml 的说明),所以字数不达标也只能
-        # 在这里补救:把它并进精修的整改清单,让这一次改写顺手把长度拉回预算,
-        # 而不是花一次重写整节的代价。
+        # 字数不达标(尤其是低于下限——这是硬要求,见 section_length_problem)
+        # 与文风越界一律并进整改清单,让这一次精修顺手把长度拉回预算。
         problems = style_violations(text)
         length_problem = section_length_problem(
             count_chinese_characters(text), int(current.get("word_budget") or 0)
@@ -446,10 +460,10 @@ def build_section_polish_stage(client: LLMClient) -> Stage:
         if length_problem:
             problems = [length_problem, *problems]
 
-        # 每节都跑这一趟,即便确定性体检一条都没报:语病、错别字、标点误用是
-        # 程序看不见的,而它们恰恰是本场景唯一不肯让步的红线。这也是全流程仅有
-        # 的一次"返工"——它只改语言、不碰情节(见 prompts.SECTION_POLISH),
-        # 所以代价固定是一次调用,不像重写那样把整节的爆点重新赌一遍。
+        # 每节至少跑一趟,即便确定性体检一条都没报:语病、错别字、标点误用是
+        # 程序看不见的,而它们恰恰是本场景唯一不肯让步的红线。本节点被包在
+        # section_review_loop 里(见 workflow.yaml),审校判否时会带着具体意见
+        # 再跑一轮——KEY_FEEDBACK 非空就是上一轮被驳回的理由。
         out = _ask(
             agent,
             ctx,
@@ -460,6 +474,7 @@ def build_section_polish_stage(client: LLMClient) -> Stage:
                 prompts.KEY_BRIEF: state.get(BRIEF_PATH) or {},
                 prompts.KEY_METRICS: style_metrics(text),
                 prompts.KEY_AUTO_PROBLEMS: problems,
+                prompts.KEY_FEEDBACK: _feedback_from(state, SECTION_REVIEW_LOOP_LAST_PATH),
             },
         )
         polished_raw = str(out.get("text") or "").strip()
@@ -493,7 +508,7 @@ def build_section_polish_stage(client: LLMClient) -> Stage:
     return Stage(
         name="section_polish",
         executor=executor,
-        reads=[SECTION_ITEM_PATH, BRIEF_PATH, SECTIONS_PATH],
+        reads=[SECTION_REVIEW_LOOP_LAST_PATH, SECTION_ITEM_PATH, BRIEF_PATH, SECTIONS_PATH],
         writes=[SECTIONS_PATH],
         output_schema=SECTION_WRITE_OUTPUT_SCHEMA,
     )
@@ -509,7 +524,7 @@ def build_section_critic_stage(client: LLMClient) -> Stage:
         sections = state.get(SECTIONS_PATH) or []
         current = _current_section(state)
         index = current.get("index")
-        text = str(inputs.get("text") or "")
+        text = _section_text(sections, index)
 
         auto_problems = style_violations(text)
         length_problem = section_length_problem(

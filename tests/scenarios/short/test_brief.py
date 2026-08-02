@@ -24,6 +24,11 @@ class ParseBriefTests(unittest.TestCase):
         self.assertEqual(brief["premise"], "一个人要找回被偷走的名字")
         self.assertEqual(brief["target_word_count"], DEFAULT_TARGET_WORD_COUNT)
         self.assertEqual(brief["hook_types"], [])
+        self.assertEqual(brief["section_count"], 4)
+
+    def test_section_count_can_still_be_set_to_auto(self):
+        # 默认是固定 4 节,但显式填 0 仍然表示"由大纲阶段自己决定(4-10 节)"。
+        brief = parse_brief({"premise": "x", "section_count": 0})
         self.assertEqual(brief["section_count"], 0)
 
     def test_missing_premise_is_rejected(self):
