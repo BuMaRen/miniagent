@@ -11,9 +11,8 @@
 # 避免引入第二套"共享状态"概念。
 #
 # YAML DSL 见 state/schema.py 模块 docstring:标量类型名写作字符串
-# str/int/float/bool,!optional 对应 Optional;OneOf 枚举与对象子结构一样,都是
-# 在 types: 里具名声明、别处裸名引用,不需要标签(!optional 是这份 DSL 里唯一
-# 保留的 YAML 标签)。
+# str/int/float/bool;OneOf 枚举与对象子结构一样,都是在 types: 里具名声明、
+# 别处裸名引用,不需要标签。
 #
 # characters/world/timeline/foreshadowing/chapters 的元素形状起在 types: 里
 # 具名声明,而不是内联写在下面的 definition 里:scenarios/novel/stages.yaml 里
@@ -55,7 +54,7 @@ types:
     id: str
     planted_in_chapter: int
     description: str
-    payoff_chapter: !optional int
+    payoff_chapter: int
     status: foreshadowing_status
   chapter:
     index: int

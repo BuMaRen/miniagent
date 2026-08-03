@@ -223,7 +223,7 @@ def build_scripted_client_factory():
                         "id": "fs_01",
                         "planted_in_chapter": 1,
                         "description": "苏亦说话时偶尔带着不合时宜的腔调和用词,被亭长张越注意到并记在心里",
-                        "payoff_chapter": None,
+                        "payoff_chapter": 3,
                         "status": "planted",
                     }
                 ],
@@ -282,7 +282,7 @@ def build_scripted_client_factory():
                         "id": "fs_01",
                         "planted_in_chapter": 1,
                         "description": "苏亦说话时偶尔带着不合时宜的腔调和用词,被亭长张越注意到并记在心里",
-                        "payoff_chapter": None,
+                        "payoff_chapter": 3,
                         "status": "planted",
                     }
                 ],

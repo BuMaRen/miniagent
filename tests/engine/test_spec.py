@@ -51,8 +51,7 @@ class SpecTestCase(unittest.TestCase):
         self.clients: list[FakeClient] = []
 
         self.executors.register("my_executor", lambda ctx, inputs: {"ok": True})
-        self.prompts.register("style_guide", "【风格】现实主义")
-        self.prompts.register("stage_prompt", "开头\n@style_guide\n\n输出格式:\n@output_schema_example")
+        self.prompts.register("stage_prompt", "开头\n\n输出格式:\n@output_schema_example")
         self.schemas.register(
             StateSchema(name="critic_output", definition={"needs_revision": bool, "feedback": str})
         )
@@ -123,13 +122,15 @@ class AgentExecutorTests(SpecTestCase):
         agent = self.agent_of(registry.get("n"))
         self.assertEqual(
             agent.memory.system_prompt,
-            '开头\n【风格】现实主义\n\n输出格式:\n{\n  "needs_revision": true,\n  "feedback": "..."\n}',
+            '开头\n\n输出格式:\n{\n  "needs_revision": true,\n  "feedback": "..."\n}',
         )
 
-    def test_literal_prompt_is_used_as_is_and_still_expands_references(self):
+    def test_literal_prompt_is_used_as_is_without_expanding_at_references(self):
+        # 字面量 prompt 原样使用;里面出现的 "@其它名字" 不再被展开——框架不做
+        # 提示词之间的引用拼接(见 prompts/registry.py 模块 docstring)。
         registry = self.build(self._spec(prompt="自定义开头\n@style_guide"))
         agent = self.agent_of(registry.get("n"))
-        self.assertTrue(agent.memory.system_prompt.startswith("自定义开头\n【风格】现实主义"))
+        self.assertTrue(agent.memory.system_prompt.startswith("自定义开头\n@style_guide"))
 
     def test_output_format_is_appended_when_the_prompt_has_no_placeholder(self):
         self.prompts.register("bare", "没有占位符")

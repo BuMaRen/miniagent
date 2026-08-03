@@ -52,7 +52,7 @@ story_bible:
     - id: string
       planted_in_chapter: int
       description: string
-      payoff_chapter: int | null   # 尚未回收时为 null
+      payoff_chapter: int          # 大纲阶段就要定下具体回收的章节号,不留 null
       status: planted | resolved | dropped   # dropped 需在全文统稿阶段显式判定,不能悬空
 
   chapters:

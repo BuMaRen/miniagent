@@ -9,13 +9,18 @@ definition 的表示法(自定义"类型树",零三方依赖,与本仓库其余�
       · 标量类型 str / int / float / bool  —— 值须是该类型(bool 不当作 int)。
       · dict{字段名: 子描述符}              —— 对象;默认拒绝未声明的键(抓拼写错)。
       · [子描述符]  (单元素列表)           —— 同构列表,每个元素匹配该子描述符。
-      · Optional(子描述符)                 —— 允许 None,否则匹配子描述符(如 int|null)。
       · OneOf(v1, v2, ...)                  —— 枚举字面量(如 role 的三选一)。
       · ANY                                 —— 不施加任何约束。
     definition 为 None 时,整份 schema 视作完全宽松(不校验)。
 
+    没有"允许为 null"这一档:一个字段要么有确定类型(缺省时该按 empty() 填该
+    类型的零值,如 int 是 0、str 是 ""),要么整份不校验(ANY)。"这个值现在还
+    不知道"不必靠 null 表达,零值本身就够用了——真正需要的时候(如小说场景的
+    payoff_chapter 在伏笔尚未安排回收章节时),场景方自己在字段语义里约定"0/空
+    串代表未定",不必框架专门开一档 Optional 类型。
+
 小说 Story Bible 的 characters 片段大致可写成:
-    OneOf, Optional, ANY 组合出——
+    OneOf、ANY 组合出——
     {"characters": [{
         "id": str, "name": str,
         "role": OneOf("protagonist", "antagonist", "supporting"),
@@ -31,7 +36,6 @@ definition 的表示法(自定义"类型树",零三方依赖,与本仓库其余�
 翻译成 definition。YAML 里的写法:
     · 标量类型名写作字符串 "str" / "int" / "float" / "bool";"any" 对应 ANY。
     · dict 仍是 dict(对象),单元素 list 仍是同构列表([int]、[{...}])。
-    · Optional 写作 `!optional <子描述符>`——这是这份 DSL 里唯一保留的 YAML 标签。
     · 除上面几个内置标量名与 "any" 外,任何裸字符串都会去 `types:` 声明的具名
       类型表里按名字查(见下)。OneOf 枚举也是靠这条规则引用的,不再需要单独的
       标签:在 `types:` 里声明一个 `{enum: [v1, v2, ...]}`,别处直接写它的名字。
@@ -103,16 +107,6 @@ class _AnyType:
 ANY = _AnyType()
 
 
-class Optional:
-    """允许 None,否则按 inner 校验(对应 story bible 里的 `int | null`)。"""
-
-    def __init__(self, inner: Any) -> None:
-        self.inner = inner
-
-    def __repr__(self) -> str:
-        return f"Optional({self.inner!r})"
-
-
 class OneOf:
     """枚举:值必须是列出的字面量之一(对应 `protagonist|antagonist|supporting`)。"""
 
@@ -121,13 +115,6 @@ class OneOf:
 
     def __repr__(self) -> str:
         return f"OneOf{self.choices!r}"
-
-
-def _unwrap(desc: Any) -> Any:
-    """剥掉 Optional 外壳,取到真正的结构描述符(用于路径下钻)。"""
-    while isinstance(desc, Optional):
-        desc = desc.inner
-    return desc
 
 
 def _is_index(seg: str) -> bool:
@@ -140,12 +127,6 @@ def _validate(desc: Any, value: Any, path: str) -> None:
     where = path or "<root>"
 
     if desc is ANY or isinstance(desc, _AnyType) or desc is None:
-        return
-
-    if isinstance(desc, Optional):
-        if value is None:
-            return
-        _validate(desc.inner, value, path)
         return
 
     if isinstance(desc, OneOf):
@@ -199,13 +180,10 @@ def _to_json_schema(desc: Any) -> dict[str, Any]:
     """把描述符递归转成 JSON Schema,供 LLM Provider 的结构化输出模式使用。
 
     刻意生成两家 Provider strict 模式都能接受的形状:对象一律
-    additionalProperties=false 且所有字段进 required(可选性改用
-    Optional -> nullable 表达,而不是从 required 里剔除)。
+    additionalProperties=false 且所有字段进 required。
     """
     if desc is ANY or isinstance(desc, _AnyType) or desc is None:
         return {}
-    if isinstance(desc, Optional):
-        return {"anyOf": [_to_json_schema(desc.inner), {"type": "null"}]}
     if isinstance(desc, OneOf):
         return {"enum": list(desc.choices)}
     if isinstance(desc, type) and desc in _JSON_TYPE_MAP:
@@ -224,8 +202,8 @@ def _to_json_schema(desc: Any) -> dict[str, Any]:
 
 def _empty(desc: Any) -> Any:
     """按描述符生成一个"类型正确的零值",作为空初始状态的骨架。"""
-    if isinstance(desc, Optional) or isinstance(desc, OneOf):
-        return None  # 可空字段/枚举没有天然零值,留空由后续填
+    if isinstance(desc, OneOf):
+        return None  # 枚举没有天然零值,留空由后续填
     if desc is ANY or isinstance(desc, _AnyType) or desc is None:
         return None
     if isinstance(desc, list):
@@ -246,8 +224,6 @@ def _prompt_example(desc: Any) -> Any:
     和 _empty 的取舍不同:这里的目标是给模型看的示例,不是合法的零值状态,所以
     OneOf 渲染成把候选项用 "|" 连起来的字符串(一眼看到取值范围),而不是 None。
     """
-    if isinstance(desc, Optional):
-        return _prompt_example(desc.inner)
     if isinstance(desc, OneOf):
         return "|".join(str(c) for c in desc.choices)
     if desc is ANY or isinstance(desc, _AnyType) or desc is None:
@@ -261,38 +237,6 @@ def _prompt_example(desc: Any) -> Any:
     raise SchemaError(f"无法识别的 schema 描述符 {desc!r}")
 
 
-class _YamlLoader(yaml.SafeLoader):
-    """独立子类,避免 !optional 的构造器污染全局 yaml.SafeLoader。"""
-
-
-class _RawOptional:
-    """!optional 标签的解析期占位——inner 此时可能仍是待编译的类型名字符串。"""
-
-    def __init__(self, inner: Any) -> None:
-        self.inner = inner
-
-
-def _construct_tagged_node(loader: yaml.SafeLoader, node: yaml.Node) -> Any:
-    """构造标签节点自身携带的值(而非按标签二次派发)。
-
-    !optional 的标签直接标在值节点上(如 `!optional int` 里,node 本身就是内容
-    为 "int" 的标量节点),所以要按节点种类(标量/序列/映射)直接构造其内容,
-    不能走 construct_object(node)——那会按 node.tag 重新查找构造器、落回这同一个
-    标签,触发 PyYAML 的自递归保护而报错。
-    """
-    if isinstance(node, yaml.ScalarNode):
-        return loader.construct_scalar(node)
-    if isinstance(node, yaml.SequenceNode):
-        return loader.construct_sequence(node, deep=True)
-    if isinstance(node, yaml.MappingNode):
-        return loader.construct_mapping(node, deep=True)
-    raise SchemaError(f"无法识别的 YAML 节点种类: {node!r}")
-
-
-_YamlLoader.add_constructor(
-    "!optional", lambda loader, node: _RawOptional(_construct_tagged_node(loader, node))
-)
-
 _YAML_SCALAR_TYPES: dict[str, type] = {"str": str, "int": int, "float": float, "bool": bool}
 
 # {enum: [v1, v2, ...]} 是 OneOf 的声明写法(取代旧的 !oneof 标签):单键 dict 靠
@@ -304,7 +248,7 @@ _ENUM_KEY = "enum"
 
 
 def _compile_yaml_node(node: Any, registry: dict[str, Any] | None = None) -> Any:
-    """把 yaml.load(Loader=_YamlLoader) 解析出的原生结构编译成 definition 类型树。
+    """把 yaml.safe_load 解析出的原生结构编译成 definition 类型树。
 
     registry 是"已经编译好的具名类型"表(types: 段落按声明顺序逐条编译时随读随写、
     definition: 段落用编译完的整张表)。裸字符串只要不是内置标量名,就会去这张表
@@ -312,8 +256,6 @@ def _compile_yaml_node(node: Any, registry: dict[str, Any] | None = None) -> Any
     自引用。这一条引用规则同时覆盖"对象子结构复用"与"具名枚举引用"两种场景,
     不再需要 !type/!oneof 这类标签来区分。
     """
-    if isinstance(node, _RawOptional):
-        return Optional(_compile_yaml_node(node.inner, registry))
     if isinstance(node, str):
         if node == "any":
             return ANY
@@ -354,7 +296,7 @@ def _compile_types_section(raw: dict[str, Any], base: dict[str, Any] | None) -> 
 
 def _load_raw_yaml(path: str | Path) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
-        return yaml.load(f, Loader=_YamlLoader) or {}
+        return yaml.safe_load(f) or {}
 
 
 def load_types(path: str | Path, types: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -410,7 +352,7 @@ class StateSchema:
     def empty(self) -> dict[str, Any]:
         """构造一个符合 schema 的空初始状态(用于新一次运行的起点)。
 
-        对象逐字段填零值、列表填 []、标量填对应零值、可空字段填 None。
+        对象逐字段填零值、列表填 []、标量填对应零值、枚举字段填 None。
         definition 为 None 时返回空 dict。
         """
         if self.definition is None:
@@ -465,7 +407,6 @@ class StateSchema:
         for seg in path.split("."):
             walked.append(seg)
             here = ".".join(walked)
-            desc = _unwrap(desc)
             # ANY 之下的任何子路径都不再约束。
             if desc is ANY or isinstance(desc, _AnyType) or desc is None:
                 return ANY

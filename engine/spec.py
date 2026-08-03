@@ -52,7 +52,11 @@ engine/workflow.py 的 Workflow.from_spec);这里声明的是**节点本身**:�
   `output_schema: critic_output` 查 state.schema.SchemaRegistry,
   `tools: [research]` 查 agent.toolset.ToolSetRegistry。
 - **prompt 的值本身就是文本**,裸字符串没法区分"正文"和"名字",所以引用要显式写成
-  `"@名字"`(去 prompts.PromptRegistry 检索);不带 @ 的就是字面量正文。
+  `"@名字"`(去 prompts.PromptRegistry 检索);不带 @ 的就是字面量正文。这一步
+  只是按名查一次表,查到的正文原样使用——prompt 正文内部要不要再引用别的提示词,
+  框架不管(见 prompts/registry.py 模块 docstring):PromptRegistry 只负责登记
+  与按名取回,不做正文展开;哪几段提示词要共享同一段文字,由场景方自己在准备
+  `*.prompt` 文件时拼好整段、或者直接复制,不是这里的职责。
 
 ⚠️ `@` 是 YAML 的保留指示符,**不能**作为 plain scalar 的首字符——`prompt: @foo`
 会让 yaml.safe_load 直接报 "found character '@' that cannot start any token"。
@@ -62,8 +66,10 @@ engine/workflow.py 的 Workflow.from_spec);这里声明的是**节点本身**:�
 
 agent executor 必须声明 output_schema(既用于 Provider 的结构化输出,也用于
 Stage 的输出校验),因此"输出格式示例"这段文本框架能自己生成,不必在提示词里手抄:
-提示词里写一行 `@output_schema_example` 就会被替换成
+提示词里**独占一行**写 `@output_schema_example` 就会被替换成
 `StateSchema.to_prompt_example()` 的结果;没写这行时,框架把它追加到提示词末尾。
+这是本模块(节点装配)现算现填的一个占位符,不经过 PromptRegistry,也不是"引用
+另一段提示词"。
 """
 
 from __future__ import annotations
@@ -102,10 +108,6 @@ OUTPUT_SCHEMA_EXAMPLE = "output_schema_example"
 
 # 提示词里没写上面那个占位符时,自动追加的一段的抬头。
 _OUTPUT_FORMAT_HEADER = "输出格式(严格输出 JSON,不要加 markdown 代码块):"
-
-# 内部哨兵:先把占位符替换成它,借此判断提示词里到底有没有用到这个占位符
-# (用不到就走"自动追加"),再换成真正的示例文本。
-_EXAMPLE_SENTINEL = "\x00output_schema_example\x00"
 
 _NODE_KEYS = {"executor", "checkpoint", "reads", "writes", "input_schema", "output_schema", "wrap"}
 _AGENT_KEYS = {"model", "tools", "toolsets", "prompt", "output_schema", "max_steps"}
@@ -327,26 +329,24 @@ class NodeBuilder:
     def _prompt(self, node: str, value: Any, output_schema: StateSchema | None) -> str:
         if not isinstance(value, str):
             raise SpecError(f"节点 {node!r} 的 prompt: 须是字符串(\"@名字\" 或字面量),得到 {value!r}")
-        placeholders = {OUTPUT_SCHEMA_EXAMPLE: _EXAMPLE_SENTINEL}
         ref = parse_ref(value)
         try:
-            text = (
-                self.prompts.get(ref, placeholders)
-                if ref is not None
-                else self.prompts.render(value, placeholders)
-            )
-        except Exception as err:  # PromptError:未注册 / 循环引用
+            text = self.prompts.get(ref) if ref is not None else value
+        except Exception as err:  # PromptError:未注册
             raise SpecError(f"节点 {node!r} 的 prompt: {err}") from None
         return _fill_output_example(text, output_schema)
 
 
 def _fill_output_example(text: str, output_schema: StateSchema | None) -> str:
-    """把提示词里的输出格式占位符换成真正的示例;没写占位符就追加到末尾。"""
+    """把提示词里独占一行的输出格式占位符换成真正的示例;没写占位符就追加到末尾。"""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if parse_ref(line) == OUTPUT_SCHEMA_EXAMPLE:
+            lines[i] = output_schema.to_prompt_example() if output_schema is not None else ""
+            return "\n".join(lines)
     if output_schema is None:
-        return text.replace(_EXAMPLE_SENTINEL, "")
+        return text
     example = output_schema.to_prompt_example()
-    if _EXAMPLE_SENTINEL in text:
-        return text.replace(_EXAMPLE_SENTINEL, example)
     return f"{text.rstrip()}\n\n{_OUTPUT_FORMAT_HEADER}\n{example}\n"
 
 

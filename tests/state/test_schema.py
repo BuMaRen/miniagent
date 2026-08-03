@@ -6,7 +6,6 @@ from pathlib import Path
 from state.schema import (
     ANY,
     OneOf,
-    Optional,
     SchemaError,
     SchemaRegistry,
     StateSchema,
@@ -20,13 +19,6 @@ class ValidateTests(unittest.TestCase):
         schema.validate({"x": 123})
         schema.validate({"x": None})
         schema.validate({"x": [1, "two", {}]})
-
-    def test_optional_allows_none_or_inner(self):
-        schema = StateSchema("s", {"x": Optional(int)})
-        schema.validate({"x": None})
-        schema.validate({"x": 3})
-        with self.assertRaises(SchemaError):
-            schema.validate({"x": "not an int"})
 
     def test_oneof_enforces_choices(self):
         schema = StateSchema("s", {"role": OneOf("a", "b", "c")})
@@ -95,9 +87,9 @@ class EmptyTests(unittest.TestCase):
         schema = StateSchema("s", {"items": [int]})
         self.assertEqual(schema.empty(), {"items": []})
 
-    def test_optional_and_oneof_default_to_none(self):
-        schema = StateSchema("s", {"x": Optional(int), "y": OneOf("a", "b")})
-        self.assertEqual(schema.empty(), {"x": None, "y": None})
+    def test_oneof_defaults_to_none(self):
+        schema = StateSchema("s", {"y": OneOf("a", "b")})
+        self.assertEqual(schema.empty(), {"y": None})
 
     def test_nested_object_recurses(self):
         schema = StateSchema("s", {"outer": {"inner": int}})
@@ -191,18 +183,6 @@ class ToJsonSchemaTests(unittest.TestCase):
             },
         )
 
-    def test_optional_becomes_nullable_anyof(self):
-        schema = StateSchema("s", {"x": Optional(int)})
-        self.assertEqual(
-            schema.to_json_schema(),
-            {
-                "type": "object",
-                "properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "null"}]}},
-                "required": ["x"],
-                "additionalProperties": False,
-            },
-        )
-
     def test_oneof_becomes_enum(self):
         schema = StateSchema("s", {"role": OneOf("a", "b", "c")})
         self.assertEqual(
@@ -256,17 +236,16 @@ class FromYamlTests(unittest.TestCase):
         with self.assertRaises(SchemaError):
             schema.validate({"chapters": [{"index": "bad", "title": "One"}]})
 
-    def test_optional_tag_and_inline_enum(self):
+    def test_inline_enum(self):
         schema = self._load(
             """
             name: s
             definition:
-              payoff_chapter: !optional int
+              payoff_chapter: int
               status:
                 enum: [planted, resolved, dropped]
             """
         )
-        schema.validate({"payoff_chapter": None, "status": "planted"})
         schema.validate({"payoff_chapter": 3, "status": "resolved"})
         with self.assertRaises(SchemaError):
             schema.validate({"status": "nope"})
@@ -296,13 +275,11 @@ class FromYamlTests(unittest.TestCase):
             definition:
               role:
                 enum: [a, b]
-              note: !optional str
+              note: str
               items: [int]
             """
         )
-        python_schema = StateSchema(
-            "s", {"role": OneOf("a", "b"), "note": Optional(str), "items": [int]}
-        )
+        python_schema = StateSchema("s", {"role": OneOf("a", "b"), "note": str, "items": [int]})
         self.assertEqual(yaml_schema.empty(), python_schema.empty())
         self.assertEqual(yaml_schema.to_json_schema(), python_schema.to_json_schema())
 
@@ -437,14 +414,10 @@ class NamedTypesTests(unittest.TestCase):
 
 
 class ToPromptExampleTests(unittest.TestCase):
-    def test_scalars_and_optional_and_any(self):
-        schema = StateSchema(
-            "s", {"a": str, "b": int, "c": float, "d": bool, "e": Optional(int), "f": ANY}
-        )
+    def test_scalars_and_any(self):
+        schema = StateSchema("s", {"a": str, "b": int, "c": float, "d": bool, "f": ANY})
         example = json.loads(schema.to_prompt_example())
-        self.assertEqual(
-            example, {"a": "...", "b": 0, "c": 0.0, "d": True, "e": 0, "f": "..."}
-        )
+        self.assertEqual(example, {"a": "...", "b": 0, "c": 0.0, "d": True, "f": "..."})
 
     def test_oneof_joins_choices_with_pipe(self):
         schema = StateSchema("s", {"role": OneOf("a", "b", "c")})
@@ -487,12 +460,12 @@ class SchemaRegistryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             (directory / "shared.yaml").write_text(
-                "types:\n  point:\n    x: int\n    y: int\ndefinition:\n  origin: !type point\n",
+                "types:\n  point:\n    x: int\n    y: int\ndefinition:\n  origin: point\n",
                 encoding="utf-8",
             )
-            # 名字取文件里的 name:,没写就取文件名;!type 引用的是外部注入的类型表。
+            # 名字取文件里的 name:,没写就取文件名;"point" 引用的是外部注入的类型表。
             (directory / "output.yaml").write_text(
-                "name: stage_output\ndefinition:\n  where: !type point\n", encoding="utf-8"
+                "name: stage_output\ndefinition:\n  where: point\n", encoding="utf-8"
             )
             types = load_types(directory / "shared.yaml")
             # 返回的是 schema 名(按文件名顺序:output.yaml 先于 shared.yaml)。

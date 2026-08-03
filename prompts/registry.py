@@ -1,34 +1,14 @@
-"""PromptRegistry —— "提示词名 -> 正文"的登记表,以及正文里的引用展开。
+"""PromptRegistry —— "提示词名 -> 正文"的登记表。
 
 与 tools.registry.ToolRegistry / engine.stage.ExecutorRegistry 同构:全局有一张
 default_registry,场景方把提示词写成磁盘上的 `*.prompt` 文件、用 load_dir() 整目录
 登记,之后在 stages.yaml 里用 "@名字" 按名引用(见 engine/spec.py)。
 
-## 为什么要"展开",而不是一个文件一段完整提示词
-
-同一段话常常要出现在多段提示词里(小说场景的风格基调 style_guide 就同时出现在 7
-个 Stage 的 system prompt 里)。所以正文里**独占一行**的 `@其它提示词名` 会被替换成
-那段提示词的正文(递归展开,带环检测):
-
-    你负责小说创作流程中的"立意扩展"阶段。
-
-    @style_guide
-
-    输入会包含题材(topic)……
-
-只认"独占一行"这一种写法,是为了不必区分"这个 @ 是引用还是正文里恰好出现的字符"
-——行内的 @ 一律当普通文本。确实需要单起一行写字面量 @xxx 时,写成 `@@xxx`。
-
-## 占位符(placeholders)
-
-有些片段在登记期还不知道内容,只有用到它的那个 Stage 才知道——典型的是"输出格式"
-一节要贴的 output_schema 示例。这类片段由调用方在取用时通过 placeholders 传入:
-
-    prompts.get("concept_expansion_prompt",
-                {"output_schema_example": schema.to_prompt_example()})
-
-placeholders 与已登记的提示词共用同一套 `@名字` 语法与同一个命名空间(placeholders
-优先),所以提示词作者不需要知道某个名字是"别的提示词"还是"调用方现算的片段"。
+这张表只做两件事:登记(register/load_dir)与按名取回原文(get)。提示词之间要不要
+共享片段、怎么拼接,是场景方自己的事——框架不提供"一段提示词里引用另一段"的展开
+机制:那样的拼接逻辑要么该由场景方在准备 `*.prompt` 文件内容时自己做(写 Python
+拼字符串,或者干脆把共享片段原样复制进每个用到它的文件——公共片段本就不常变,
+复制几份也不必担心"改一处漏改别处"),要么根本不必存在。
 """
 
 from __future__ import annotations
@@ -39,20 +19,17 @@ from pathlib import Path
 PROMPT_SUFFIX = ".prompt"
 
 # 一行只有 "@名字" 时才视为引用;名字用与 Python 标识符相同的字符集,避免把
-# "@张骞" 这类正文误判成引用。
+# "@张骞" 这类正文误判成引用。engine/spec.py 用它判断 stages.yaml 里 `prompt:`
+# 字段写的是"按名去 PromptRegistry 查"还是字面量正文。
 _REF_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
 
 
 class PromptError(ValueError):
-    """提示词缺失、循环引用等使用错误。属 ValueError 便于上层统一捕获。"""
+    """提示词缺失等使用错误。属 ValueError 便于上层统一捕获。"""
 
 
 def parse_ref(line: str) -> str | None:
-    """一行是 "@名字" 形式的引用则返回名字,否则返回 None。
-
-    engine/spec.py 也用它判断 stages.yaml 里的 `prompt:` 写的是引用还是字面量,
-    保证两处对"什么算引用"的判断完全一致。
-    """
+    """一行是 "@名字" 形式的引用则返回名字,否则返回 None。"""
     stripped = line.strip()
     if len(stripped) < 2 or stripped[0] != "@" or stripped[1] == "@":
         return None
@@ -65,11 +42,7 @@ class PromptRegistry:
         self._prompts: dict[str, str] = {}
 
     def register(self, name: str, text: str) -> bool:
-        """登记一段提示词;遇到重名返回 False,否则返回 True。
-
-        正文原样存放,引用留到 get() 时才展开——登记顺序因此无关紧要,
-        style_guide 晚于引用它的提示词登记也没问题。
-        """
+        """登记一段提示词;遇到重名返回 False,否则返回 True。"""
         if name in self._prompts:
             return False
         self._prompts[name] = text
@@ -99,42 +72,13 @@ class PromptRegistry:
                 loaded.append(file.stem)
         return loaded
 
-    def raw(self, name: str) -> str:
-        """按名取回**未展开**的原始正文,缺失时给出带候选清单的清晰错误。"""
+    def get(self, name: str) -> str:
+        """按名取回提示词正文,缺失时给出带候选清单的清晰错误。"""
         try:
             return self._prompts[name]
         except KeyError:
             known = ", ".join(self.names()) or "<空>"
             raise PromptError(f"提示词 {name!r} 未注册;已登记: {known}") from None
-
-    def get(self, name: str, placeholders: dict[str, str] | None = None) -> str:
-        """按名取回**展开后**的正文(见模块 docstring)。"""
-        return self._expand(self.raw(name), placeholders or {}, [name])
-
-    def render(self, text: str, placeholders: dict[str, str] | None = None) -> str:
-        """展开一段**字面量**正文里的引用。
-
-        供"提示词直接写在 stages.yaml 里、没有单独成文件"的情况使用——它同样可以
-        引用 @style_guide 这类已登记片段。
-        """
-        return self._expand(text, placeholders or {}, [])
-
-    def _expand(self, text: str, placeholders: dict[str, str], stack: list[str]) -> str:
-        lines: list[str] = []
-        for line in text.splitlines():
-            name = parse_ref(line)
-            if name is None:
-                # "@@xxx" 是转义写法:还原成字面量的 "@xxx"。
-                lines.append(line.replace("@@", "@", 1) if line.strip()[:2] == "@@" else line)
-                continue
-            if name in placeholders:
-                lines.append(placeholders[name])
-                continue
-            if name in stack:
-                chain = " -> ".join([*stack, name])
-                raise PromptError(f"提示词循环引用: {chain}")
-            lines.append(self._expand(self.raw(name), placeholders, [*stack, name]))
-        return "\n".join(lines)
 
 
 # 全局默认注册表,供场景方 load_dir()、engine/spec.py 解析 "@引用" 时共享。
@@ -151,6 +95,6 @@ def load_dir(path: str | Path) -> list[str]:
     return default_registry.load_dir(path)
 
 
-def get(name: str, placeholders: dict[str, str] | None = None) -> str:
-    """从 default_registry 按名取回展开后的提示词正文。"""
-    return default_registry.get(name, placeholders)
+def get(name: str) -> str:
+    """从 default_registry 按名取回提示词正文。"""
+    return default_registry.get(name)
