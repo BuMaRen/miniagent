@@ -28,10 +28,9 @@ from llm.client import LLMClient
 from llm.logging_client import LoggingLLMClient
 from state.backends.json_file import JsonFileStateStore
 
+from scenarios.novel import SCENARIO
+from scenarios.novel.executors import NEEDS_REVISION_KEY
 from scenarios.novel.landing import land_output
-from scenarios.novel.stages import NEEDS_REVISION_KEY
-from scenarios.novel.state_schema import empty_state
-from scenarios.novel.workflow import build_workflow
 
 DEFAULT_BRIEF_PATH = Path(__file__).with_name("brief.yaml")
 DEFAULT_OUTPUT_DIR = Path(__file__).with_name("output")
@@ -279,12 +278,12 @@ def main() -> None:
 
     brief = load_brief(args.brief)
     log_dir = (args.output_dir / "log") if args.log_chats else None
-    workflow = build_workflow(client_factory=make_client_factory(log_dir))
+    workflow = SCENARIO.build_workflow(client_factory=make_client_factory(log_dir))
 
     state_path = args.state_file or (args.output_dir / DEFAULT_STATE_FILE)
     state_store = JsonFileStateStore(state_path)
     if not state_store.snapshot():
-        state_store.load(empty_state())
+        state_store.load(SCENARIO.empty_state())
 
     resume = _load_resume_point(state_path)
     if resume is not None:

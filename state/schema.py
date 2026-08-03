@@ -31,12 +31,16 @@ definition 的表示法(自定义"类型树",零三方依赖,与本仓库其余�
 翻译成 definition。YAML 里的写法:
     · 标量类型名写作字符串 "str" / "int" / "float" / "bool";"any" 对应 ANY。
     · dict 仍是 dict(对象),单元素 list 仍是同构列表([int]、[{...}])。
-    · Optional 写作 `!optional <子描述符>`,OneOf 写作 `!oneof [v1, v2, ...]`。
-上面 characters 片段对应的 YAML:
+    · Optional 写作 `!optional <子描述符>`——这是这份 DSL 里唯一保留的 YAML 标签。
+    · 除上面几个内置标量名与 "any" 外,任何裸字符串都会去 `types:` 声明的具名
+      类型表里按名字查(见下)。OneOf 枚举也是靠这条规则引用的,不再需要单独的
+      标签:在 `types:` 里声明一个 `{enum: [v1, v2, ...]}`,别处直接写它的名字。
+上面 characters 片段对应的 YAML(character_role 是提前在 types: 里声明好的具名
+枚举,见下一段):
     characters:
       - id: str
         name: str
-        role: !oneof [protagonist, antagonist, supporting]
+        role: character_role
         status_log:
           - after_chapter: int
             state: str
@@ -44,23 +48,31 @@ definition 的表示法(自定义"类型树",零三方依赖,与本仓库其余�
 "构造胶水"由 from_yaml 统一完成,不必再在场景代码里写 `StateSchema(name=...,
 definition=...)`。
 
-同一个子结构常常要在多处复用(如 story_bible.characters 的元素形状,同时也是
-某个 Stage output_schema 的一部分)——顶层可加一个 `types:` 段落,给子结构起名,
-别处用 `!type <名字>` 引用,而不是重复内联同一段结构:
+同一个子结构(或枚举)常常要在多处复用(如 story_bible.characters 的元素形状,
+同时也是某个 Stage output_schema 的一部分)——顶层可加一个 `types:` 段落,给它
+起名,别处直接写这个名字引用,而不是重复内联同一段结构:
     types:
+      character_role:
+        enum: [protagonist, antagonist, supporting]
       character:
         id: str
         name: str
+        role: character_role
     definition:
-      characters: [!type character]
-`types:` 按书写顺序逐条编译:每条编译完就立刻写进"已就绪类型"表,所以 `!type`
-只能引用*前面已经声明过*的类型——不支持前向引用或自引用,故意不做循环检测这类
+      characters: [character]
+`{enum: [...]}` 这个写法之所以不能直接写成裸列表 `role: [v1, v2, v3]`,是因为
+裸列表的语法已经被"同构数组"占用了(`[X]` 表示"元素都长 X 的样子",且只能有
+一个元素描述符)——`enum:` 这个具名 key 是刻意选来消歧义的,同时也是这份 DSL 里
+除标量类型名之外的另一个保留字(对象里恰好只有一个叫这个名字的字段时会被当成
+枚举声明而非字段,这是刻意接受的边界情况)。
+`types:` 按书写顺序逐条编译:每条编译完就立刻写进"已就绪类型"表,所以裸名引用
+只能指向*前面已经声明过*的类型——不支持前向引用或自引用,故意不做循环检测这类
 额外复杂度。`definition:` 在整个 `types:` 都编译完之后才编译,这时全部具名类型
 都已就绪。跨文件复用具名类型时,调用方可以:
     · 用 load_types(path) 单独编译某份 YAML 的 types: 段,拿到 {名字: 编译后的
       类型} 这张表;
     · 把这张表作为 `types=` 传给另一份 YAML 的 from_yaml(path, types=表),
-      这份文件里的 `!type` 就能引用表里的条目(以及自己 types: 段里更早声明的)。
+      这份文件里的裸名引用就能查到表里的条目(以及自己 types: 段里更早声明的)。
 
 StateSchema.to_prompt_example() 能把 definition 渲染成一段占位符 JSON 文本,
 供 Stage 的 system prompt 里"输出格式"这类说明复用,不必手抄一份几乎同构的例子
@@ -250,7 +262,7 @@ def _prompt_example(desc: Any) -> Any:
 
 
 class _YamlLoader(yaml.SafeLoader):
-    """独立子类,避免 !optional/!oneof 的构造器污染全局 yaml.SafeLoader。"""
+    """独立子类,避免 !optional 的构造器污染全局 yaml.SafeLoader。"""
 
 
 class _RawOptional:
@@ -260,29 +272,13 @@ class _RawOptional:
         self.inner = inner
 
 
-class _RawOneOf:
-    """!oneof 标签的解析期占位,理由同 _RawOptional。"""
-
-    def __init__(self, choices: list[Any]) -> None:
-        self.choices = choices
-
-
-class _RawTypeRef:
-    """!type 标签的解析期占位:记住引用的类型名,留给 _compile_yaml_node 按
-    "已编译好的具名类型表"去查——查不到(还没声明/根本没声明)就是使用错误。
-    """
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-
 def _construct_tagged_node(loader: yaml.SafeLoader, node: yaml.Node) -> Any:
     """构造标签节点自身携带的值(而非按标签二次派发)。
 
-    !optional/!oneof 的标签直接标在值节点上(如 `!optional int` 里,node 本身
-    就是内容为 "int" 的标量节点),所以要按节点种类(标量/序列/映射)直接构造
-    其内容,不能走 construct_object(node)——那会按 node.tag 重新查找构造器、
-    落回这同一个标签,触发 PyYAML 的自递归保护而报错。
+    !optional 的标签直接标在值节点上(如 `!optional int` 里,node 本身就是内容
+    为 "int" 的标量节点),所以要按节点种类(标量/序列/映射)直接构造其内容,
+    不能走 construct_object(node)——那会按 node.tag 重新查找构造器、落回这同一个
+    标签,触发 PyYAML 的自递归保护而报错。
     """
     if isinstance(node, yaml.ScalarNode):
         return loader.construct_scalar(node)
@@ -296,50 +292,49 @@ def _construct_tagged_node(loader: yaml.SafeLoader, node: yaml.Node) -> Any:
 _YamlLoader.add_constructor(
     "!optional", lambda loader, node: _RawOptional(_construct_tagged_node(loader, node))
 )
-def _construct_oneof(loader: yaml.SafeLoader, node: yaml.Node) -> "_RawOneOf":
-    choices = _construct_tagged_node(loader, node)
-    if not isinstance(choices, list):
-        raise SchemaError(f"!oneof 的取值须为列表,得到: {choices!r}")
-    return _RawOneOf(choices)
-
-
-_YamlLoader.add_constructor("!oneof", _construct_oneof)
-_YamlLoader.add_constructor(
-    "!type", lambda loader, node: _RawTypeRef(loader.construct_scalar(node))
-)
 
 _YAML_SCALAR_TYPES: dict[str, type] = {"str": str, "int": int, "float": float, "bool": bool}
+
+# {enum: [v1, v2, ...]} 是 OneOf 的声明写法(取代旧的 !oneof 标签):单键 dict 靠
+# 结构而不是标签消歧义,因为裸列表 `[X]` 的语法已经被"同构数组"占用了(见下方
+# list 分支,且规定只能有一个元素描述符)。"enum" 是这份 DSL 除标量类型名之外的
+# 另一个保留字——对象里恰好只有一个叫这个名字的字段时会被当成枚举声明而非字段,
+# 这是刻意接受的边界情况(真实场景里几乎不会有对象长这样)。
+_ENUM_KEY = "enum"
 
 
 def _compile_yaml_node(node: Any, registry: dict[str, Any] | None = None) -> Any:
     """把 yaml.load(Loader=_YamlLoader) 解析出的原生结构编译成 definition 类型树。
 
     registry 是"已经编译好的具名类型"表(types: 段落按声明顺序逐条编译时随读随写、
-    definition: 段落用编译完的整张表),!type 引用在这张表里查不到即报错——引用
-    只能指向前面已声明的类型,不支持前向引用或自引用。
+    definition: 段落用编译完的整张表)。裸字符串只要不是内置标量名,就会去这张表
+    按名字查——查不到即报错,引用只能指向前面已声明的类型,不支持前向引用或
+    自引用。这一条引用规则同时覆盖"对象子结构复用"与"具名枚举引用"两种场景,
+    不再需要 !type/!oneof 这类标签来区分。
     """
-    if isinstance(node, _RawTypeRef):
-        if registry is None or node.name not in registry:
-            raise SchemaError(
-                f"引用了未声明的类型 {node.name!r}(!type 只能引用 types: 中"
-                "更早声明的条目,不支持前向引用)"
-            )
-        return registry[node.name]
     if isinstance(node, _RawOptional):
         return Optional(_compile_yaml_node(node.inner, registry))
-    if isinstance(node, _RawOneOf):
-        return OneOf(*node.choices)
     if isinstance(node, str):
         if node == "any":
             return ANY
         if node in _YAML_SCALAR_TYPES:
             return _YAML_SCALAR_TYPES[node]
-        raise SchemaError(f"未知的标量类型名 {node!r}(可用: str/int/float/bool/any)")
+        if registry is not None and node in registry:
+            return registry[node]
+        raise SchemaError(
+            f"未知的类型名 {node!r}(可用标量: str/int/float/bool/any,"
+            "或 types: 中已声明的具名类型)"
+        )
     if isinstance(node, list):
         if len(node) != 1:
             raise SchemaError(f"schema 列表须恰好一个元素描述符,得到 {len(node)} 个: {node!r}")
         return [_compile_yaml_node(node[0], registry)]
     if isinstance(node, dict):
+        if set(node) == {_ENUM_KEY}:
+            choices = node[_ENUM_KEY]
+            if not isinstance(choices, list):
+                raise SchemaError(f"enum 的取值须为列表,得到: {choices!r}")
+            return OneOf(*choices)
         return {k: _compile_yaml_node(v, registry) for k, v in node.items()}
     raise SchemaError(f"无法识别的 schema YAML 节点: {node!r}")
 
@@ -399,8 +394,8 @@ class StateSchema:
         definition: <类型树>};name 缺省时取文件名(不含扩展名)。
 
         Args:
-            types: 外部注入的已编译具名类型(见 load_types),供本文件的 !type
-                引用跨文件复用;与本文件自己 types: 段的编译结果合并(本文件的
+            types: 外部注入的已编译具名类型(见 load_types),供本文件的裸名引用
+                跨文件复用;与本文件自己 types: 段的编译结果合并(本文件的
                 同名条目优先)后,再用来编译 definition。
         """
         raw = _load_raw_yaml(path)

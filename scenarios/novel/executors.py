@@ -1,47 +1,27 @@
-"""本场景的节点:能声明的都在 stages.yaml 里,这里只留必须用 Python 表达的部分。
-
-节点的装配(建 Agent、挂 ToolSet、塞提示词、传 output_schema、包成 Stage)已经
-下沉到框架(engine/spec.py),场景侧因此只剩三类东西:
+"""本场景在声明式定义(stages.yaml/state_schema.yaml/schemas//prompts//toolsets/)
+之外,真正需要手写 Python 的那一小部分——按 engine/scenario.py 的目录约定,本文件在
+`Scenario.from_package` 装配场景时被自动 import 一次,用来触发下面两类装饰器的登记
+副作用;其余装配(读 YAML、登记四张注册表、拼 Workflow)都已经下沉到框架。
 
 1. **纯函数 executor** —— input_parsing(默认值填充)、chapter_finalize(状态推进)、
    final_qa(字数/结构核对)都是确定性计算,用普通函数当 executor 比用 LLM 更可靠
    也更省成本;它们用 `@executor` 装饰器登记,stages.yaml 里按名引用。这正是
    docs/framework-design.md §3.2 强调的"Stage 不关心怎么产出输出"的体现。
-2. **带副作用的节点包装** —— 章节 status 的推进(reviewed / 打回 drafted)是评审
-   节点的旁路写回:这两个节点自己的输出契约是 {needs_revision, feedback},容不下
-   额外的 story_bible.chapters 字段,只能以 Node 协议允许的"直接读写 ctx.state"
-   完成。声明式定义表达不了这种副作用,所以先让框架按 stages.yaml 建出节点,再在
-   外面包一层薄薄的 Node(见 _with_status_writeback / _ChapterHumanReviewCheckpoint)。
-3. **build_node_registry** —— 把提示词/schema/工具集三个目录登记进各自的注册表,
-   调框架的 build_node_registry,再打上那两层包装。
-
-提示词全部在 prompts/*.prompt 里(风格基调 style_guide 被 7 段提示词各引用一次,
-不再像以前那样靠 f-string 拼);各 Stage 的 output_schema 在 schemas/*.yaml 里,
-需要复用 story_bible 子结构(character/chapter/...)的靠 types=NOVEL_TYPES 从
-state_schema.yaml 借出那张具名类型表。
+2. **节点包装工厂** —— 章节 status 的推进(reviewed / 打回 drafted)是评审节点的
+   旁路写回:这两个节点自己的输出契约是 {needs_revision, feedback},容不下额外的
+   story_bible.chapters 字段,只能以 Node 协议允许的"直接读写 ctx.state"完成。
+   声明式定义表达不了这种副作用,所以用 `@node_wrapper` 登记一个 (Node) -> Node
+   的包装函数,再在 stages.yaml 对应节点上写 `wrap: 包装器名` 引用它(见
+   engine/spec.py 的 NodeBuilder)。
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-import prompts
-from agent import toolset as toolset_registry
 from engine.context import RunContext
-from engine.spec import ClientFactory, build_node_registry as build_node_registry_from_spec
-from engine.stage import Node, executor
-from engine.workflow import NodeRegistry
-from state import schema as schema_registry
-
-from scenarios.novel.state_schema import NOVEL_TYPES, STORY_BIBLE_SCHEMA
-from scenarios.novel.toolsets.qa import QA_TOOLSET, count_chinese_characters
-from scenarios.novel.toolsets.research import RESEARCH_TOOLSET
-
-_HERE = Path(__file__).parent
-STAGES_YAML_PATH = _HERE / "stages.yaml"
-PROMPTS_DIR = _HERE / "prompts"
-SCHEMAS_DIR = _HERE / "schemas"
+from engine.stage import Node, executor, node_wrapper
+from scenarios.novel.toolsets.qa import count_chinese_characters
 
 # Loop 的游标:引擎把"上一个跑完的 body 节点的产出"整块发布在这条状态路径上
 # (见 engine/primitives/loop.py),形如 f"_loop.{loop 的 name}.last"。它是"上一轮
@@ -200,50 +180,19 @@ class _ChapterHumanReviewCheckpoint:
         return result
 
 
-# ---------------------------------------------------------------------------
-# 三、组装:登记三张注册表 -> 交给框架按 stages.yaml 建节点 -> 打上两层包装
-# ---------------------------------------------------------------------------
+@node_wrapper
+def chapter_critic_status_writeback(node: Node) -> Node:
+    return _ChapterCriticWithStatusWriteback(node)
 
 
-def build_node_registry(
-    client_factory: ClientFactory, stage_models: dict[str, str] | None = None
-) -> NodeRegistry:
-    """按 stages.yaml 组装本场景全部节点,注册进一个新的 NodeRegistry。
-
-    Args:
-        client_factory: 按 (节点名, model) 取一个 LLMClient 的工厂函数。真实运行
-            通常按 model 分组复用 client 实例;线下演示按名字返回预置好回复的
-            ScriptedLLMClient(见 offline_demo.py),忽略 model。
-        stage_models: workflow.yaml 里每个节点名解析出的生效 model(见
-            engine.workflow.Workflow.resolve_stage_models);某个节点及其所有祖先
-            节点都没标注过 model 时不出现在这个 dict 里,此时传给 client_factory
-            的 model 为 None。
-
-    注册表都是全局的(每个模块的 default_registry),登记又是幂等的,所以这里每次
-    都无脑登记一遍:重复调用(测试里很常见)不会互相干扰。
-    """
-    prompts.load_dir(PROMPTS_DIR)
-    schema_registry.default_registry.load_dir(SCHEMAS_DIR, types=NOVEL_TYPES)
-    schema_registry.default_registry.register(STORY_BIBLE_SCHEMA)
-    toolset_registry.register(RESEARCH_TOOLSET)
-    toolset_registry.register(QA_TOOLSET)
-
-    registry = build_node_registry_from_spec(
-        STAGES_YAML_PATH,
-        client_factory=client_factory,
-        stage_models=stage_models,
-    )
-    registry.replace(_ChapterCriticWithStatusWriteback(registry.get("chapter_critic")))
-    registry.replace(_ChapterHumanReviewCheckpoint(registry.get("chapter_pause")))
-    return registry
+@node_wrapper
+def chapter_human_review_writeback(node: Node) -> Node:
+    return _ChapterHumanReviewCheckpoint(node)
 
 
 __all__ = [
-    "STORY_BIBLE_SCHEMA",
-    "ClientFactory",
     "CHAPTER_LOOP_ITEM_PATH",
     "CHAPTER_REVIEW_LOOP_LAST_PATH",
     "NEEDS_REVISION_KEY",
     "OUTLINE_LOOP_LAST_PATH",
-    "build_node_registry",
 ]

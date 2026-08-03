@@ -3,7 +3,7 @@
 # 与 workflow.yaml 的分工:那份文件说"这些节点怎么串"(Sequence/Loop/ForEach 的
 # 嵌套结构),这份文件说"每个节点是什么"(谁执行、读写哪些状态切片、输出要符合
 # 哪份契约)。两份都由框架解析(engine/spec.py + engine/workflow.py),场景侧的
-# stages.py 只剩下确实必须用 Python 表达的那几件事。
+# executors.py 只剩下确实必须用 Python 表达的那几件事。
 #
 # 引用规则(详见 engine/spec.py 模块 docstring):
 #   · executor / output_schema / tools 写的都是**名字**,分别去 ExecutorRegistry
@@ -109,7 +109,7 @@ chapter_drafting:
 
 # --- 3.8 章节审校 ------------------------------------------------------------
 # 过审后还要把该章 status 推进到 "reviewed",那一步是引擎表达不了的状态写回,
-# 由 stages.py 在本节点外面包一层(见 _with_status_writeback)。
+# 由 executors.py 登记的包装器在本节点外面包一层(见 chapter_critic_status_writeback)。
 chapter_critic:
   executor:
     tools:
@@ -121,12 +121,14 @@ chapter_critic:
     - story_bible.world
     - story_bible.timeline
     - story_bible.foreshadowing
+  wrap: chapter_critic_status_writeback
 
-# --- 3.8.0.1 章节人工复核(同样被 stages.py 包了一层:判否要把该章打回 drafted)
+# --- 3.8.0.1 章节人工复核(同样被包了一层:判否要把该章打回 drafted)
 chapter_pause:
   checkpoint:
     prompt: 本章已通过 AI 审校,请确认是否继续下一章;不通过请给出修改意见。
     resume_input_schema: critic_output
+  wrap: chapter_human_review_writeback
 
 # --- 3.8.1 章节定稿:兜底把 status 推进到 "reviewed",纯函数 ------------------
 chapter_finalize:

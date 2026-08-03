@@ -10,10 +10,12 @@ import unittest
 from pathlib import Path
 
 from agent.toolset import ToolSet, ToolSetRegistry
+from engine.context import RunContext
 from engine.primitives.checkpoint import Checkpoint
 from engine.spec import SpecError, build_node_registry, load_spec
-from engine.stage import ExecutorRegistry, Stage
+from engine.stage import ExecutorRegistry, NodeWrapperRegistry, Stage
 from prompts.registry import PromptRegistry
+from state.backends.memory import InMemoryStateStore
 from state.schema import SchemaRegistry, StateSchema
 
 
@@ -45,6 +47,7 @@ class SpecTestCase(unittest.TestCase):
         self.prompts = PromptRegistry()
         self.schemas = SchemaRegistry()
         self.toolsets = ToolSetRegistry()
+        self.wrappers = NodeWrapperRegistry()
         self.clients: list[FakeClient] = []
 
         self.executors.register("my_executor", lambda ctx, inputs: {"ok": True})
@@ -68,6 +71,7 @@ class SpecTestCase(unittest.TestCase):
             prompts=self.prompts,
             schemas=self.schemas,
             toolsets=self.toolsets,
+            wrappers=self.wrappers,
             **kwargs,
         )
 
@@ -217,6 +221,61 @@ class CheckpointTests(SpecTestCase):
         self.prompts.register("ask", "请确认")
         registry = self.build({"cp": {"checkpoint": {"prompt": "@ask"}}})
         self.assertEqual(registry.get("cp").prompt, "请确认")
+
+
+class _TaggingNode:
+    """薄包装:name 与内层节点一致(与 scenarios/novel/executors.py 里的真实包装
+    同构),run() 的输出多打一个标签,用来在测试里断言"确实被包过"。
+    """
+
+    def __init__(self, node, tag: str) -> None:
+        self._node = node
+        self.name = node.name
+        self._tag = tag
+
+    def run(self, ctx, inputs):
+        outputs = dict(self._node.run(ctx, inputs))
+        outputs.setdefault("tags", []).append(self._tag)
+        return outputs
+
+
+class WrapTests(SpecTestCase):
+    """节点建好后按 `wrap:` 声明套一层包装(见 engine/stage.py 的 node_wrapper)。"""
+
+    def setUp(self):
+        super().setUp()
+        self.wrappers.register("tag_a", lambda node: _TaggingNode(node, "a"))
+        self.wrappers.register("tag_b", lambda node: _TaggingNode(node, "b"))
+        self.ctx = RunContext(state=InMemoryStateStore())
+
+    def test_wrap_applies_a_registered_wrapper_after_building_a_stage(self):
+        registry = self.build({"n": {"executor": "my_executor", "wrap": "tag_a"}})
+        node = registry.get("n")
+        self.assertEqual(node.name, "n")
+        self.assertEqual(node.run(self.ctx, {}), {"ok": True, "tags": ["a"]})
+
+    def test_wrap_applies_a_registered_wrapper_after_building_a_checkpoint(self):
+        registry = self.build({"cp": {"checkpoint": {"prompt": "确认?"}, "wrap": "tag_a"}})
+        node = registry.get("cp")
+        self.assertEqual(node.name, "cp")
+        self.assertIsInstance(node, _TaggingNode)
+
+    def test_wrap_list_applies_wrappers_in_order(self):
+        registry = self.build(
+            {"n": {"executor": "my_executor", "wrap": ["tag_a", "tag_b"]}}
+        )
+        self.assertEqual(registry.get("n").run(self.ctx, {})["tags"], ["a", "b"])
+
+    def test_no_wrap_leaves_the_node_untouched(self):
+        registry = self.build({"n": {"executor": "my_executor"}})
+        self.assertNotIsInstance(registry.get("n"), _TaggingNode)
+
+    def test_unknown_wrapper_name_lists_candidates(self):
+        with self.assertRaises(SpecError) as caught:
+            self.build({"n": {"executor": "my_executor", "wrap": "nope"}})
+        message = str(caught.exception)
+        self.assertIn("'n'", message)
+        self.assertIn("tag_a", message)
 
 
 class ErrorReportingTests(SpecTestCase):

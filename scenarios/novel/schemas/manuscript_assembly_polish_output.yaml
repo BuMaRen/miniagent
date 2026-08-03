@@ -1,6 +1,6 @@
-# "全文统稿与润色"阶段(stages.py 的 manuscript_assembly_polish)的 output_schema。
+# "全文统稿与润色"阶段(stages.yaml 的 manuscript_assembly_polish)的 output_schema。
 # chapter/foreshadowing 借自 state_schema.yaml 的 types:。
 name: manuscript_assembly_polish_output
 definition:
-  story_bible.chapters: [!type chapter]
-  story_bible.foreshadowing: [!type foreshadowing]
+  story_bible.chapters: [chapter]
+  story_bible.foreshadowing: [foreshadowing]

@@ -35,6 +35,15 @@ engine/workflow.py 的 Workflow.from_spec);这里声明的是**节点本身**:�
         prompt: 大纲已通过 AI 评审,请确认……
         resume_input_schema: critic_output
 
+    chapter_critic:                 # ④ wrap -> 节点建好后按名套一层包装
+      executor: {...}
+      wrap: chapter_critic_status_writeback   # 或 wrap: [a, b] 按序应用多个
+
+`wrap` 是节点建好之后(不管是 executor 还是 checkpoint 分支建出来的)再做的一层
+包装,用来表达声明式定义本身表达不了的副作用——包装函数按 `engine.stage.node_wrapper`
+装饰器登记进 `NodeWrapperRegistry`,取代过去场景侧在自己的 build_node_registry 里
+手写 `registry.replace(SomeWrapper(registry.get("目标节点名")))` 这行接线。
+
 ## 引用规则:什么时候写裸字符串,什么时候写 "@"
 
 - **executor / schema / toolset 本身就是对象**,YAML 里写得下的只有它们的名字,
@@ -69,8 +78,9 @@ from agent.memory import ConversationMemory
 from agent.toolset import ToolSetRegistry
 from agent.toolset import default_registry as default_toolset_registry
 from engine.primitives.checkpoint import Checkpoint
-from engine.stage import ExecutorRegistry, Node, Stage
+from engine.stage import ExecutorRegistry, Node, NodeWrapperRegistry, Stage
 from engine.stage import default_registry as default_executor_registry
+from engine.stage import default_wrapper_registry
 from engine.workflow import NodeRegistry
 from llm.client import LLMClient
 from prompts.registry import PromptRegistry, parse_ref
@@ -97,7 +107,7 @@ _OUTPUT_FORMAT_HEADER = "输出格式(严格输出 JSON,不要加 markdown 代�
 # (用不到就走"自动追加"),再换成真正的示例文本。
 _EXAMPLE_SENTINEL = "\x00output_schema_example\x00"
 
-_NODE_KEYS = {"executor", "checkpoint", "reads", "writes", "input_schema", "output_schema"}
+_NODE_KEYS = {"executor", "checkpoint", "reads", "writes", "input_schema", "output_schema", "wrap"}
 _AGENT_KEYS = {"model", "tools", "toolsets", "prompt", "output_schema", "max_steps"}
 _CHECKPOINT_KEYS = {"prompt", "resume_input_schema"}
 
@@ -131,6 +141,7 @@ class NodeBuilder:
         prompts: PromptRegistry | None = None,
         schemas: SchemaRegistry | None = None,
         toolsets: ToolSetRegistry | None = None,
+        wrappers: NodeWrapperRegistry | None = None,
         defaults: dict[str, Any] | None = None,
     ) -> None:
         self.client_factory = client_factory
@@ -139,12 +150,13 @@ class NodeBuilder:
         self.prompts = prompts if prompts is not None else default_prompt_registry
         self.schemas = schemas if schemas is not None else default_schema_registry
         self.toolsets = toolsets if toolsets is not None else default_toolset_registry
+        self.wrappers = wrappers if wrappers is not None else default_wrapper_registry
         self.defaults = defaults or {}
 
     # -- 单个节点 ---------------------------------------------------------------
 
     def build(self, name: str, spec: Any) -> Node:
-        """按节点定义建出 Stage 或 Checkpoint。"""
+        """按节点定义建出 Stage 或 Checkpoint,再应用 `wrap` 声明的包装(若有)。"""
         if not isinstance(spec, dict):
             raise SpecError(f"节点 {name!r}: 定义须是 dict,得到 {spec!r}")
         unknown = set(spec) - _NODE_KEYS
@@ -155,10 +167,28 @@ class NodeBuilder:
         if "checkpoint" in spec:
             if "executor" in spec:
                 raise SpecError(f"节点 {name!r}: checkpoint 与 executor 只能二选一")
-            return self._build_checkpoint(name, spec["checkpoint"])
-        if "executor" not in spec:
+            node = self._build_checkpoint(name, spec["checkpoint"])
+        elif "executor" not in spec:
             raise SpecError(f"节点 {name!r}: 缺少 'executor'(或 'checkpoint')")
-        return self._build_stage(name, spec)
+        else:
+            node = self._build_stage(name, spec)
+        return self._apply_wraps(name, node, spec.get("wrap"))
+
+    def _apply_wraps(self, name: str, node: Node, value: Any) -> Node:
+        if value is None:
+            return node
+        names = [value] if isinstance(value, str) else value
+        if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+            raise SpecError(
+                f"节点 {name!r} 的 wrap: 须是已注册的包装器名(str)或其列表,得到 {value!r}"
+            )
+        for wrapper_name in names:
+            try:
+                wrapper = self.wrappers.get(wrapper_name)
+            except KeyError as err:
+                raise SpecError(f"节点 {name!r} 的 wrap: {err.args[0]}") from None
+            node = wrapper(node)
+        return node
 
     def _build_stage(self, name: str, spec: dict[str, Any]) -> Stage:
         output_schema = self._schema(name, "output_schema", spec.get("output_schema"))
@@ -329,6 +359,7 @@ def build_node_registry(
     prompts: PromptRegistry | None = None,
     schemas: SchemaRegistry | None = None,
     toolsets: ToolSetRegistry | None = None,
+    wrappers: NodeWrapperRegistry | None = None,
 ) -> NodeRegistry:
     """把一份 stages 定义(dict 或 YAML 路径)编译成 NodeRegistry。
 
@@ -341,8 +372,8 @@ def build_node_registry(
             executor 就必须提供。
         stage_models: workflow.yaml 解析出的 {节点名: model}(见
             engine.workflow.Workflow.resolve_stage_models),优先于节点自带的 model。
-        executors / prompts / schemas / toolsets: 四张注册表,缺省用各模块的
-            default_registry。
+        executors / prompts / schemas / toolsets / wrappers: 五张注册表,缺省用
+            各模块的 default_registry。
     """
     if isinstance(spec, (str, Path)):
         spec = load_spec(spec)
@@ -353,6 +384,7 @@ def build_node_registry(
         prompts=prompts,
         schemas=schemas,
         toolsets=toolsets,
+        wrappers=wrappers,
         defaults=spec.get(DEFAULTS_KEY) or {},
     )
     registry = NodeRegistry()

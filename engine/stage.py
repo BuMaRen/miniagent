@@ -97,6 +97,69 @@ def executor(func: Executor) -> Executor:
     return func
 
 
+# (Node) -> Node:接收一个已建好的节点,返回包一层之后的节点(通常是同名的薄包装,
+# 补上声明式定义表达不了的副作用)。
+NodeWrapper = Callable[["Node"], "Node"]
+
+
+class NodeWrapperRegistry:
+    """"包装器名 -> (Node) -> Node" 的登记表,与 ExecutorRegistry 同构。
+
+    场景侧有些副作用是声明式的 stages.yaml 表达不了的(例如某个评审节点通过后要
+    顺带把状态里另一处字段也推进一下,见 scenarios/novel 里章节 status 的乐观
+    推进/打回)。过去的做法是在场景自己的 build_node_registry 里,节点建好之后
+    手写 `registry.replace(SomeWrapper(registry.get("目标节点名")))`;现在改成
+    在这里登记一个按名字可查的包装函数,再让 stages.yaml 对应节点写一行
+    `wrap: 包装器名` 引用它(见 engine/spec.py 的 NodeBuilder),把"建好之后包一层"
+    这件事也变成声明式的,不必再在场景侧手写这行接线代码。
+    """
+
+    def __init__(self) -> None:
+        self._wrappers: dict[str, NodeWrapper] = {}
+
+    def register(self, name: str, wrapper: NodeWrapper) -> bool:
+        """登记一个包装器;遇到重名返回 False,否则返回 True。"""
+        if name in self._wrappers:
+            return False
+        self._wrappers[name] = wrapper
+        return True
+
+    def unregister(self, name: str) -> None:
+        """移除一个包装器(重名登记前先卸载,或热替换时会用到)。"""
+        self._wrappers.pop(name, None)
+
+    def names(self) -> list[str]:
+        """已登记的全部包装器名(排序后),用于报错时列出候选。"""
+        return sorted(self._wrappers)
+
+    def get(self, name: str) -> NodeWrapper:
+        """按名取回包装器,缺失时给出带候选清单的清晰错误。"""
+        try:
+            return self._wrappers[name]
+        except KeyError:
+            known = ", ".join(self.names()) or "<空>"
+            raise KeyError(f"NodeWrapper '{name}' 未注册;已登记: {known}") from None
+
+
+# 全局默认注册表,供场景侧用 @node_wrapper 装饰器登记。
+default_wrapper_registry = NodeWrapperRegistry()
+
+
+def node_wrapper(func: NodeWrapper) -> NodeWrapper:
+    """装饰器:把一个 (Node) -> Node 函数注册为节点包装器,登记到 default_wrapper_registry。
+
+    用法:
+        @node_wrapper
+        def chapter_critic_status_writeback(node: Node) -> Node:
+            return _ChapterCriticWithStatusWriteback(node)
+
+    与 @executor 对称,以函数名(func.__name__)作为登记 key;stages.yaml 里某个
+    节点定义写 `wrap: chapter_critic_status_writeback` 就会在该节点建好后应用它。
+    """
+    default_wrapper_registry.register(func.__name__, func)
+    return func
+
+
 @dataclass
 class Stage:
     """一个具体的执行步骤。

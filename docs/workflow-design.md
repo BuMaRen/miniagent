@@ -182,8 +182,7 @@ stages:
 `resume_input` 合并)天然是评审契约 `{"needs_revision": bool, "feedback": str}`
 的超集,只要 `resume_input_schema` 声明成这个形状即可。两者叠加,人工审阅就成了
 "body 里多列一项"而不是"多一条独立流程"——engine 与场景侧都不需要为此新增任何
-节点类型(见 `scenarios/novel/stages.py` 的
-`build_outline_human_review_checkpoint` / `build_chapter_human_review_checkpoint`)。
+节点类型(见 `scenarios/novel/executors.py` 的 `_ChapterHumanReviewCheckpoint`)。
 
 注意判定字段叫 `needs_revision` 而不是 `passed`:`continue_when` 是一条裸状态
 路径、引擎只取它的真假,没有取反的余地,所以字段必须朝着"还要再改一轮"为真去

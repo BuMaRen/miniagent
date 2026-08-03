@@ -3,7 +3,7 @@
 run.py 需要 ANTHROPIC_API_KEY/OPENAI_API_KEY 才能工作,但"这套接线到底通不通"
 应该不依赖网络和账单。这里给每个需要 LLM 的 Stage 配一个
 ScriptedLLMClient(与 tests/agent/test_agent.py 用的手法一致):预先写好这一次
-要"生成"的内容,严格按各 Stage 在 stages.py 里约定的 JSON 契约打包成响应。
+要"生成"的内容,严格按各 Stage 在 executors.py / stages.yaml 里约定的 JSON 契约打包成响应。
 Critic 类 Stage 统一脚本成 {"needs_revision": false},所以每个 Loop 的 body
 一轮就跑完、不会重开第二轮——这是为了让"跑通全流程"这件事在没有真实模型判断力
 的情况下依然确定性可复现,不代表真实运行时 Loop 不会修订。
@@ -32,10 +32,9 @@ from llm.client import ChatResponse, LLMClient
 from llm.message import Message
 from state.backends.memory import InMemoryStateStore
 
+from scenarios.novel import SCENARIO
+from scenarios.novel.executors import NEEDS_REVISION_KEY
 from scenarios.novel.landing import land_output
-from scenarios.novel.stages import NEEDS_REVISION_KEY
-from scenarios.novel.state_schema import empty_state
-from scenarios.novel.workflow import build_workflow
 
 DEFAULT_BRIEF_PATH = Path(__file__).with_name("brief.yaml")
 DEFAULT_OUTPUT_DIR = Path(__file__).with_name("output")
@@ -309,7 +308,7 @@ def _auto_checkpoint_handler(request: CheckpointRequest) -> dict[str, Any]:
     print(f"[checkpoint:auto] {request.name} -> 自动通过(离线演示不做交互式确认)")
     if request.name in ("confirm_outline", "chapter_pause"):
         # confirm_outline / chapter_pause 是各自 Loop body 的最后一关,契约是
-        # {"needs_revision", "feedback"}(见 stages.py 的 human review checkpoint)。
+        # {"needs_revision", "feedback"}(见 executors.py 的 human review checkpoint)。
         return {NEEDS_REVISION_KEY: False, "feedback": ""}
     return request.context or {}
 
@@ -319,8 +318,8 @@ def run_offline_demo(output_dir: Path = DEFAULT_OUTPUT_DIR) -> dict[str, Path]:
     with open(DEFAULT_BRIEF_PATH, "r", encoding="utf-8") as f:
         brief = yaml.safe_load(f)
 
-    workflow = build_workflow(client_factory=build_scripted_client_factory())
-    state_store = InMemoryStateStore(initial=empty_state())
+    workflow = SCENARIO.build_workflow(client_factory=build_scripted_client_factory())
+    state_store = InMemoryStateStore(initial=SCENARIO.empty_state())
     ctx = RunContext(
         state=state_store,
         checkpoint_handler=_auto_checkpoint_handler,

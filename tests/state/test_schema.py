@@ -256,19 +256,31 @@ class FromYamlTests(unittest.TestCase):
         with self.assertRaises(SchemaError):
             schema.validate({"chapters": [{"index": "bad", "title": "One"}]})
 
-    def test_optional_and_oneof_tags(self):
+    def test_optional_tag_and_inline_enum(self):
         schema = self._load(
             """
             name: s
             definition:
               payoff_chapter: !optional int
-              status: !oneof [planted, resolved, dropped]
+              status:
+                enum: [planted, resolved, dropped]
             """
         )
         schema.validate({"payoff_chapter": None, "status": "planted"})
         schema.validate({"payoff_chapter": 3, "status": "resolved"})
         with self.assertRaises(SchemaError):
             schema.validate({"status": "nope"})
+
+    def test_enum_value_must_be_a_list(self):
+        with self.assertRaises(SchemaError):
+            self._load(
+                """
+                name: s
+                definition:
+                  status:
+                    enum: not_a_list
+                """
+            )
 
     def test_name_defaults_to_file_stem(self):
         with tempfile.TemporaryDirectory() as d:
@@ -282,7 +294,8 @@ class FromYamlTests(unittest.TestCase):
             """
             name: s
             definition:
-              role: !oneof [a, b]
+              role:
+                enum: [a, b]
               note: !optional str
               items: [int]
             """
@@ -295,6 +308,11 @@ class FromYamlTests(unittest.TestCase):
 
 
 class NamedTypesTests(unittest.TestCase):
+    """裸名引用:既用来复用 types: 里的对象子结构,也用来引用具名枚举——两者是
+    同一条查找规则(见 state/schema.py 的 _compile_yaml_node),不再需要
+    !type/!oneof 这类标签来区分。
+    """
+
     def _load(self, text: str) -> StateSchema:
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "schema.yaml"
@@ -308,9 +326,30 @@ class NamedTypesTests(unittest.TestCase):
             types:
               character:
                 id: str
-                role: !oneof [protagonist, antagonist]
+                role:
+                  enum: [protagonist, antagonist]
             definition:
-              characters: [!type character]
+              characters: [character]
+            """
+        )
+        python_schema = StateSchema(
+            "s", {"characters": [{"id": str, "role": OneOf("protagonist", "antagonist")}]}
+        )
+        self.assertEqual(yaml_schema.empty(), python_schema.empty())
+        self.assertEqual(yaml_schema.to_json_schema(), python_schema.to_json_schema())
+
+    def test_named_enum_can_be_declared_and_referenced_separately(self):
+        yaml_schema = self._load(
+            """
+            name: s
+            types:
+              role_type:
+                enum: [protagonist, antagonist]
+              character:
+                id: str
+                role: role_type
+            definition:
+              characters: [character]
             """
         )
         python_schema = StateSchema(
@@ -328,9 +367,9 @@ class NamedTypesTests(unittest.TestCase):
                 target_id: str
               character:
                 id: str
-                relationships: [!type relationship]
+                relationships: [relationship]
             definition:
-              characters: [!type character]
+              characters: [character]
             """
         )
         yaml_schema.validate(
@@ -345,12 +384,12 @@ class NamedTypesTests(unittest.TestCase):
                 """
                 name: s
                 definition:
-                  characters: [!type character]
+                  characters: [character]
                 """
             )
 
     def test_reference_to_type_declared_later_raises(self):
-        # !type 只能引用前面已声明的类型:即便 "world" 在同一个 types: 段里,
+        # 裸名引用只能指向前面已声明的类型:即便 "world" 在同一个 types: 段里,
         # 只要写在引用它的条目*之后*,编译时那张 registry 里还没有它。
         with self.assertRaises(SchemaError):
             self._load(
@@ -358,11 +397,11 @@ class NamedTypesTests(unittest.TestCase):
                 name: s
                 types:
                   character:
-                    home: !type world
+                    home: world
                   world:
                     name: str
                 definition:
-                  characters: [!type character]
+                  characters: [character]
                 """
             )
 
@@ -386,7 +425,7 @@ class NamedTypesTests(unittest.TestCase):
                 """
                 name: some_output
                 definition:
-                  people: [!type character]
+                  people: [character]
                 """,
                 encoding="utf-8",
             )

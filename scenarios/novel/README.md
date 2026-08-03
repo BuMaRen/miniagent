@@ -16,15 +16,15 @@
 
 | 文件 | 对应框架构件 | 说明 |
 |---|---|---|
-| `state_schema.py` | `state.StateSchema` | 故事圣经的具体字段定义,对应 [docs/story-bible-schema.md](../../docs/story-bible-schema.md);相比文档多了 `chapters[*].text/word_count` 两个字段(原因见文件内注释)。 |
+| `state_schema.yaml` | `state.StateSchema` | 故事圣经的具体字段定义,对应 [docs/story-bible-schema.md](../../docs/story-bible-schema.md);相比文档多了 `chapters[*].text/word_count` 两个字段(原因见文件内注释)。 |
 | `toolsets/research.py` | `agent.ToolSet` | 历史考据小知识库(纪年、货币、路引制度、张骞出使背景…),供撰写/评审类 Stage 查证,减少"给古人塞现代常识"式的失真。 |
 | `toolsets/qa.py` | `agent.ToolSet` | 中文字数统计与区间校验,供章节审校/最终校验使用。 |
-| `schemas/*.yaml` | `state.StateSchema` | 各 Stage 的输出契约;需要复用故事圣经子结构(character/chapter…)的靠 `!type` 从 `state_schema.yaml` 借出,不重复内联。 |
+| `schemas/*.yaml` | `state.StateSchema` | 各 Stage 的输出契约;需要复用故事圣经子结构(character/chapter…)的直接裸名引用,从 `state_schema.yaml` 借出,不重复内联。 |
 | `prompts/*.prompt` | `prompts.PromptRegistry` | 各 Agent 的系统提示词。风格基调只写在 `style_guide.prompt` 里,7 段提示词各引用一行 `@style_guide`;`@output_schema_example` 由框架用该节点 output_schema 的示例填上。 |
 | `stages.yaml` | Node 声明式定义 | [docs/workflow-design.md](../../docs/workflow-design.md) §4 表格里的每一个节点:谁执行、读写哪些状态切片、输出契约、挂哪些 ToolSet、用哪段提示词。**注意不是每个节点都用 Agent**:`input_parsing`(填默认值)和 `final_qa`(字数/结构核对)是确定性计算,executor 直接写函数名——这正是 `Stage 不关心怎么产出输出` 的体现。 |
-| `stages.py` | `engine.stage.ExecutorRegistry` | 只剩两类必须用 Python 表达的东西:`@executor` 登记的纯函数,以及给两个评审节点补状态写回的薄包装(声明式定义表达不了副作用)。 |
+| `executors.py` | `engine.stage.ExecutorRegistry` / `NodeWrapperRegistry` | 只剩两类必须用 Python 表达的东西:`@executor` 登记的纯函数,以及 `@node_wrapper` 登记的、给两个评审节点补状态写回的薄包装(声明式定义表达不了副作用,由 `stages.yaml` 里对应节点的 `wrap:` 字段引用)。 |
 | `workflow.yaml` | Workflow 声明式定义 | 纯结构(sequence/loop/foreach/checkpoint),不含任何"大纲""章节"字样之外的场景语义;对应 workflow-design.md §4 的 YAML。 |
-| `workflow.py` | `Workflow.from_spec` | 读 `workflow.yaml` + `stages.build_node_registry()`,拼出可执行的 `Workflow`。 |
+| `__init__.py` | `engine.scenario.Scenario` | `SCENARIO = Scenario.from_package(__name__)`——按目录约定把上面这些 YAML 与 `executors.py` 装配成可运行的 `Workflow`,场景侧不再手写 `state_schema.py`/`workflow.py` 这类粘合代码(见 `engine/scenario.py` 模块 docstring)。 |
 | `brief.yaml` | StoryBrief(§3.1 输入) | 本场景的默认输入,只有 `topic` 必填。 |
 | `run.py` | 入口(真实运行) | 需要 `ANTHROPIC_API_KEY` 或 `OPENAI_API_KEY`。 |
 | `offline_demo.py` | 入口(线下演示) | 不需要任何 API Key,用脚本化回复跑通整条流水线,验证接线是否正确;第一章正文就写在这个文件里的 `CHAPTER_1_TEXT`。 |

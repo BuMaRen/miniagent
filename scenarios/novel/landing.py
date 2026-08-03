@@ -1,6 +1,6 @@
 """把落在 State Store 里的故事圣经"落地"成给人看的 Markdown/JSON 文件。
 
-刻意不让 LLM 自己写文件:final_qa Stage(见 stages.py)只产出结构化的校验
+刻意不让 LLM 自己写文件:final_qa Stage(见 executors.py)只产出结构化的校验
 结果,真正的磁盘 I/O 由宿主代码(run.py / offline_demo.py)在拿到
 ctx.state.snapshot() 之后统一处理——职责边界清晰,也方便单测断言产物内容。
 """

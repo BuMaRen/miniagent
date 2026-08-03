@@ -184,7 +184,7 @@ Checkpoint:
 
 需要后者时,场景方**不必也不应该改引擎**:`Node` 是一个 Protocol(结构化类型),只要写一个带 `name` 和 `run(ctx, inputs) -> outputs` 的类,就自动是合法的 Node,可以直接塞进 `Loop.body`、`Sequence.nodes`、`ForEach.body`,与内置原语平起平坐——不需要继承任何基类,也不需要在引擎里登记类型。
 
-一个真实例子(小说场景的 `_ChapterHumanReviewCheckpoint`,见 `scenarios/novel/stages.py`):它包住一个真正的 `Checkpoint`,在其返回之后补一刀状态写回(人工判否时把该章 status 打回 `drafted`)。"暂停/恢复"是控制流、归引擎;"人工判否之后该改哪个字段"是业务策略、归场景。
+一个真实例子(小说场景的 `_ChapterHumanReviewCheckpoint`,见 `scenarios/novel/executors.py`):它包住一个真正的 `Checkpoint`,在其返回之后补一刀状态写回(人工判否时把该章 status 打回 `drafted`)。"暂停/恢复"是控制流、归引擎;"人工判否之后该改哪个字段"是业务策略、归场景。
 
 反面教材也值得记一笔:早期版本里,"AI critic 先挡掉明显问题、通过后再让人工把关"曾经是场景侧一个自定义的 `ReviewChain` 节点(把多个 critic 串起来短路求值,整体顶替 `Loop` 的 `critic` 槽位)。它之所以存在,是因为当时的 `Loop` 把 `producer/critic/reviser` 三个角色写死在引擎里、只留一个 critic 槽位。§6.2 改成 `body` + 每节点判定之后,"多道关卡"变成 `body` 里多列一项,那个自定义节点就被删掉了——**原语的形状选错时,成本会以"场景侧不得不写的胶水"的形式冒出来**,这也是判断原语是否选对的一个信号。
 
