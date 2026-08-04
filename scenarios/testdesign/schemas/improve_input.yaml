@@ -1,0 +1,3 @@
+name: improve_input
+definition:
+  tc_center.test_cases.drafted_test_cases: [test_case]

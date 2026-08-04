@@ -1,0 +1,21 @@
+name: tc_center
+types:
+  test_case_state:
+    enum: [drafted, reviewed, deprecated]
+  test_case:
+    id: str
+    name: str
+    level: str
+    description: str
+    precondition: str
+    steps: str
+    expected_result: str
+    state: test_case_state
+    feedback: [str]
+definition:
+  tc_center:
+    needs_revision: bool
+    test_cases:
+      drafted_test_cases: [test_case]
+      reviewed_test_cases: [test_case]
+      deprecated_test_cases: [test_case]
