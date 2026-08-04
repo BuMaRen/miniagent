@@ -22,7 +22,6 @@ from typing import Any
 import yaml
 
 from engine.context import CheckpointRequest, LifecycleHooks, ResumePoint, RunContext
-from engine.primitives.checkpoint import CheckpointPause
 from engine.workflow import WorkflowFailure
 from llm.client import LLMClient
 from llm.logging_client import LoggingLLMClient
@@ -217,6 +216,13 @@ def make_checkpoint_handler(auto_approve: bool):
     feedback——Loop 的 continue_when 读到它就重开一轮,从生成节点开始重写,下一轮
     AI 与人工都要再看一次,直到人工放行或跑满 max_iterations(此时会以 Loop 自己的
     名字——如 "outline_loop"——触发下面的兜底分支,而不是这两个 if 分支)。
+
+    Checkpoint 本身只支持同步问答(见 engine.primitives.checkpoint 模块
+    docstring),没有"暂停等以后再答"的专属机制;chapter_pause 的 "q" 选项想要的
+    "保存进度、下次进程重启再续跑"效果,靠直接抛异常达成——它会被
+    engine.workflow.Workflow.run 的通用失败路径包成 WorkflowFailure,和其它节点
+    失败一样触发 main() 里的续跑点持久化,效果等价,只是走的是通用失败通道而不是
+    Checkpoint 专属通道。
     """
 
     def handler(request: CheckpointRequest) -> dict[str, Any]:
@@ -240,7 +246,9 @@ def make_checkpoint_handler(auto_approve: bool):
             answer = input("本章是否通过? [Y]通过并继续 / [n]提出修改意见 / [q]暂停保存进度: ").strip().lower()
             if answer in ("q", "quit"):
                 print("[info] 已选择暂停,将保存进度并落地当前产物,可稍后续跑。")
-                raise CheckpointPause(request.name)
+                raise RuntimeError(
+                    f"用户在断点 {request.name!r} 选择保存进度并退出,请稍后重新运行本命令续跑。"
+                )
             if answer in ("n", "no"):
                 feedback = input("请输入修改意见(将据此重新修订本章): ").strip()
                 return {NEEDS_REVISION_KEY: True, "feedback": feedback}
@@ -301,14 +309,6 @@ def main() -> None:
 
     try:
         outputs = workflow.run(ctx, brief)
-    except CheckpointPause as pause:
-        _save_resume_point(state_path, pause.node_index, pause.inputs, pause.checkpoint_name)
-        written = land_output(state_store.snapshot(), args.output_dir)
-        print(f"流程在断点 {pause.checkpoint_name!r} 处暂停,状态已保存到 {state_path},可稍后续跑。")
-        print("\n已落地当前产物:")
-        for label, path in written.items():
-            print(f"  {label}: {path}")
-        return
     except WorkflowFailure as failure:
         _save_resume_point(state_path, failure.node_index, failure.inputs, failure.node_name)
         print(

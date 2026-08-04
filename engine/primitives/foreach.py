@@ -21,6 +21,10 @@ N-1 轮的产物)是 body 里各 Stage 对共享 StateStore 做 reads/writes 的
 
 纯声明式:整个节点由 items_path / body / 两个游标路径描述,可从 YAML 直接拼出
 (见 Workflow.from_spec),不含任何运行期回调。
+
+body 里可以放一个 Breaker(见 engine/primitives/breaker.py):它触发时相当于
+Python 的 `break`——停止处理剩余 items,当前这一项按已处理计入游标,返回值里
+额外带一个 `"broken": True` 标记。
 """
 
 from __future__ import annotations
@@ -30,7 +34,22 @@ from typing import Any
 
 from engine.stage import Node, StatePath
 from engine.context import RunContext
-from engine.primitives.checkpoint import CheckpointPause
+from engine.primitives.breaker import LoopBreak
+
+
+def foreach_index_path(name: str) -> StatePath:
+    """下标游标路径的拼接规则,独立成函数供场景代码复用(见 ForEach.index_path)。"""
+    return f"_foreach.{name}.index"
+
+
+def foreach_item_path(name: str) -> StatePath:
+    """当前元素游标路径的拼接规则,独立成函数供场景代码复用(见 ForEach.item_path)。
+
+    场景代码需要在 Stage 的 `reads` 里引用某个 ForEach 的当前元素时,应该调用这个
+    函数而不是重新手写 `f"_foreach.{name}.item"`——否则 ForEach 的 `name` 与场景侧
+    手写的路径字符串各写一遍,改名时容易漏改一处。
+    """
+    return f"_foreach.{name}.item"
 
 
 @dataclass
@@ -42,7 +61,8 @@ class ForEach:
         items_path: 待遍历列表的状态路径(如 "story_bible.chapters")。
         body:       每轮执行的子流程(Stage / Loop / Sequence 均可)。
         index_path: 游标——当前下标存放的状态路径。默认 f"_foreach.{name}.index"。
-                    它同时是**恢复点**:从 Checkpoint 快照续跑时会接着这个下标走。
+                    它同时是**恢复点**:节点失败后从 WorkflowFailure 续跑时会接着
+                    这个下标走。
         item_path:  游标——当前元素发布到的状态路径。body 用 reads=[item_path] 读它。
                     默认 f"_foreach.{name}.item"。
     """
@@ -54,19 +74,20 @@ class ForEach:
     item_path: StatePath | None = None
 
     def run(self, ctx: RunContext, inputs: dict[str, Any]) -> dict[str, Any]:
-        index_path = self.index_path or f"_foreach.{self.name}.index"
-        item_path = self.item_path or f"_foreach.{self.name}.item"
+        index_path = self.index_path or foreach_index_path(self.name)
+        item_path = self.item_path or foreach_item_path(self.name)
 
         items = ctx.state.get(self.items_path, default=[]) or []
 
-        # init:游标缺省从 0 开始;若状态里已有值(从 Checkpoint 快照恢复),
+        # init:游标缺省从 0 开始;若状态里已有值(从失败续跑),
         #       则接着那个下标续跑 —— 恢复能力"免费"来自游标本身存在 State 里。
         if ctx.state.get(index_path, default=None) is None:
             ctx.state.patch(index_path, 0)
 
         count = 0
+        broken = False
         # condition:index < len(items)
-        while ctx.state.get(index_path, 0) < len(items):    
+        while ctx.state.get(index_path, 0) < len(items):
             i = ctx.state.get(index_path, 0)
 
             # bind:把当前元素发布到游标,body 用普通 reads 读取它。
@@ -79,14 +100,16 @@ class ForEach:
             # 避免 Stage.run 对 inputs 的原地改写跨轮泄漏。
             try:
                 self.body.run(ctx, dict(inputs))
-            except CheckpointPause:
-                # body 内部可能自己挂了一个"每轮结束后暂停"的 Checkpoint(比如
-                # 场景方在 body 末尾放置的人工确认点)——这轮该做的事已经做完了,
-                # 只是流程主动选择在此暂停,所以要先 advance 再把暂停继续往上抛,
-                # 否则恢复时会把刚跑完的这一项重新跑一遍。真正跑失败(其他
-                # Exception)则不 advance,交由外层重试同一项。
+            except LoopBreak:
+                # Breaker 判定为真:这一项已经跑到断路点,视为处理完(advance),
+                # 但不再处理剩余 items —— 相当于 Python 的 break,不是异常失败,
+                # 不再往上抛。
                 ctx.state.patch(index_path, i + 1)
-                raise
+                count += 1
+                broken = True
+                if ctx.hooks and ctx.hooks.after_loop_iteration:
+                    ctx.hooks.after_loop_iteration(self.name, i, True)
+                break
 
             if ctx.hooks and ctx.hooks.after_loop_iteration:
                 ctx.hooks.after_loop_iteration(self.name, i, True)
@@ -97,4 +120,7 @@ class ForEach:
 
         # 清理游标,避免"当前元素"泄漏给后续节点。
         ctx.state.patch(item_path, None)
-        return {"iterations": count, "items_path": self.items_path}
+        result = {"iterations": count, "items_path": self.items_path}
+        if broken:
+            result["broken"] = True
+        return result

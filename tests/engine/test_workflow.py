@@ -1,7 +1,7 @@
 import unittest
 
 from engine.context import ResumePoint, RunContext
-from engine.primitives.checkpoint import Checkpoint, CheckpointPause
+from engine.primitives.checkpoint import Checkpoint
 from engine.primitives.loop import OnExceed
 from engine.stage import Stage
 from engine.workflow import NodeRegistry, Workflow, WorkflowFailure
@@ -39,28 +39,21 @@ class WorkflowRunTests(unittest.TestCase):
         result = wf.run(_ctx(), {"value": 0})
         self.assertEqual(result, {"value": 3})
 
-    def test_checkpoint_pause_bubbles_with_position_filled_in(self):
+    def test_checkpoint_without_handler_becomes_a_workflow_failure(self):
+        # Checkpoint 不再有专属的暂停机制(见 engine.primitives.checkpoint 模块
+        # docstring):缺 handler 就是一次普通异常,和其它节点失败一样被通用失败
+        # 路径包成 WorkflowFailure,游标/inputs 回填逻辑完全一致。
         wf = Workflow(
             name="wf",
             nodes=[_AddNode("a", 1), Checkpoint(name="cp"), _AddNode("b", 2)],
         )
-        with self.assertRaises(CheckpointPause) as ctx_mgr:
+        with self.assertRaises(WorkflowFailure) as ctx_mgr:
             wf.run(_ctx(), {"value": 0})
-        pause = ctx_mgr.exception
-        self.assertEqual(pause.checkpoint_name, "cp")
-        self.assertEqual(pause.node_index, 1)
-        self.assertEqual(pause.inputs, {"value": 1})
-
-    def test_resume_continues_from_checkpoint_node_index(self):
-        wf = Workflow(
-            name="wf",
-            nodes=[_AddNode("a", 1), Checkpoint(name="cp"), _AddNode("b", 2)],
-        )
-        resume = ResumePoint(
-            checkpoint_name="cp", node_index=1, inputs={"value": 1}, resume_input={}
-        )
-        result = wf.run(_ctx(resume=resume), {"value": 999})  # ignored: resume.inputs used
-        self.assertEqual(result, {"value": 3})
+        failure = ctx_mgr.exception
+        self.assertEqual(failure.node_name, "cp")
+        self.assertEqual(failure.node_index, 1)
+        self.assertEqual(failure.inputs, {"value": 1})
+        self.assertIsInstance(failure.__cause__, RuntimeError)
 
     def test_workflow_events_emitted_to_trace(self):
         wf = Workflow(name="wf", nodes=[_AddNode("a", 1)])
@@ -101,9 +94,8 @@ class WorkflowRunTests(unittest.TestCase):
             wf.run(_ctx(), {"value": 0})
         failure = ctx_mgr.exception
 
-        # 宿主据 WorkflowFailure 持久化后,下次运行构造一个 checkpoint_name=None
-        # 的 ResumePoint 续跑:不该是 CheckpointPause 之外的"另一套机制",而是同一个
-        # ctx.resume 通道——只是没有对应的 Checkpoint 来认领它。
+        # 宿主据 WorkflowFailure 持久化后,下次运行构造一个 ResumePoint 续跑——
+        # 这是唯一一条续跑通道,Checkpoint 失败也走它,不是另一套机制。
         resume = ResumePoint(node_index=failure.node_index, inputs=failure.inputs)
         replacement = Workflow(
             name="wf",

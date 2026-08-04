@@ -138,12 +138,9 @@ def _set_chapter_status(ctx: RunContext, chapter_index: Any, status: str) -> Non
 class _ChapterCriticWithStatusWriteback:
     """包一层 chapter_critic:AI 一过审就乐观地把该章 status 推进到 "reviewed"。
 
-    为什么不等 chapter_pause 也点头之后才推进——chapter_pause 若选择"暂停保存进度"
-    (见 run.py 的 CheckpointPause 分支),ForEach 会在暂停前先把游标 advance 到
-    下一章(engine/primitives/foreach.py 的 except 分支),导致这一章再也不会被重新
-    访问、chapter_finalize 也不会再跑到它。乐观地先标 "reviewed" 保证了"卡在断点"
-    不等于"永远卡在 drafted";人工真的给出不通过意见时,由 chapter_pause 自己把它
-    打回 "drafted"(见 _ChapterHumanReviewCheckpoint)。
+    不等 chapter_pause 也点头之后才推进,是为了让"AI 已认可、人工尚未表态"这个
+    中间状态也能被外部看到是"reviewed"而不是"drafted"——人工真的给出不通过意见时,
+    由 chapter_pause 自己把它打回 "drafted"(见 _ChapterHumanReviewCheckpoint)。
     """
 
     def __init__(self, node: Node) -> None:
@@ -160,13 +157,13 @@ class _ChapterCriticWithStatusWriteback:
 class _ChapterHumanReviewCheckpoint:
     """包一层 chapter_pause:人工给出"不通过"时把该章 status 从上面乐观写入的
     "reviewed" 打回 "drafted",驱动 chapter_review_loop 下一轮重新修订;通过、或
-    尚未决定就暂停(见 run.py 的 "q" 分支)时都保留 "reviewed"——"暂停"不代表
-    "不通过",不该把还没被人工否决的章节退回 drafted。
+    尚未决定就退出(见 run.py 的 "q" 分支,现在是直接抛异常触发 WorkflowFailure)
+    时都保留 "reviewed"——中途退出不代表"不通过",不该把还没被人工否决的章节
+    退回 drafted。
 
     仍然是名副其实的 Node(name + run),可以像原生 Checkpoint 一样放进 Loop 的
-    body;暂停/恢复的机制(ctx.resume 认领、CheckpointPause)完全委托给内部持有的
-    那个真正的 engine Checkpoint,这里只在其返回之后补一刀状态写回,不侵入引擎的
-    暂停语义。
+    body;向外部要输入这件事完全委托给内部持有的那个真正的 engine Checkpoint,
+    这里只在其返回之后补一刀状态写回。
     """
 
     def __init__(self, node: Node) -> None:

@@ -38,6 +38,12 @@ continue_when 这条状态路径读、往 _loop.<name>.last 这条状态路径�
 至于要不要把它的 outputs 当作后续节点的 inputs 来用,是场景方在自己的 Workflow
 定义里决定的事,而每个节点真正需要什么本来就该由它自己的 reads 声明。原语不替场景
 猜"哪些字段该留、哪些该扔"——那是业务语义,不是控制流形状(见 §6.5 的判断标准)。
+
+与 Breaker(见 engine/primitives/breaker.py)的分工:continue_when 是"是非器",
+只回答"这一轮算不算过";Breaker 是放进 body 里的普通 Node,回答的是一个完全独立
+的问题——"不管这一轮过没过,现在就提前结束整个 Loop"。两者互不知晓对方存在:
+Breaker 触发时(抛出 LoopBreak)不会去看 continue_when,直接把当前 outputs 当作
+"通过"收尾。
 """
 
 from __future__ import annotations
@@ -48,6 +54,17 @@ from typing import Any
 
 from engine.stage import Node, StatePath
 from engine.context import CheckpointRequest, RunContext
+from engine.primitives.breaker import LoopBreak
+
+
+def loop_cursor_path(name: str) -> StatePath:
+    """游标路径的拼接规则,独立成函数供场景代码复用(见 Loop.cursor_path)。
+
+    场景代码需要在 Stage 的 `reads` 里引用某个 Loop 的游标时,应该调用这个函数而
+    不是重新手写 `f"_loop.{name}.last"`——否则 Loop 的 `name` 与场景侧手写的路径
+    字符串各写一遍,改名时容易漏改一处。
+    """
+    return f"_loop.{name}.last"
 
 
 class OnExceed(str, Enum):
@@ -82,7 +99,7 @@ class Loop:
     @property
     def cursor_path(self) -> StatePath:
         """游标:上一个节点的产出发布在这里,body[0] 可用 reads 读它。"""
-        return f"_loop.{self.name}.last"
+        return loop_cursor_path(self.name)
 
     def run(self, ctx: RunContext, inputs: dict[str, Any]) -> dict[str, Any]:
         current: dict[str, Any] = dict(inputs)
@@ -96,7 +113,14 @@ class Loop:
             current = dict(inputs)
             restart = False
             for node in self.body:
-                current = node.run(ctx, current)
+                try:
+                    current = node.run(ctx, current)
+                except LoopBreak as brk:
+                    # Breaker 判定优先于是非器:不再检查 continue_when,直接当作
+                    # "本轮通过、循环立即结束"收尾(与 hooks 的 passed=True 语义一致)。
+                    if ctx.hooks and ctx.hooks.after_loop_iteration:
+                        ctx.hooks.after_loop_iteration(self.name, i, True)
+                    return self._finish(ctx, brk.outputs, iterations=i + 1, exhausted=False)
                 self._publish(ctx, current)
                 if bool(ctx.state.get(self.continue_when)):
                     restart = True
@@ -160,8 +184,9 @@ class Loop:
 
         清游标:避免"上一轮的产出"泄漏给循环后面的节点,也避免它(可能是整章正文
         这种大对象)长期躺在持久化的状态快照里。只在"循环真的结束了"的路径上清——
-        body 里的 Checkpoint 抛 CheckpointPause 穿过本方法时不会清掉,那是故意的:
-        续跑时 body[0] 还要靠游标读回上一轮的评审意见。
+        body 里任何节点抛异常穿过本方法(未捕获,直接冒泡)时不会清掉,那是故意的:
+        WorkflowFailure 触发的续跑重新进入这个 Loop 时,body[0] 还要靠游标读回
+        上一轮的评审意见。
 
         ``_loop`` 这个键让循环后面的节点(§6.2 里的 after_loop)能区分"是通过了"
         还是"跑满轮次被 on_exceed 放行的",而不必自己猜。

@@ -47,9 +47,11 @@ class CheckpointRequest:
 #   接到 CheckpointRequest,(阻塞)向人/外部系统征集输入,返回一份 dict。
 #   它**只**做业务侧的"收集"这一件事:
 #     · 不做校验              —— 返回值是否合法由 Checkpoint 用 schema 强制;
-#     · 不做持久化/恢复        —— 那是宿主收到 CheckpointPause 后的事;
 #     · 不接触 RunContext/State —— 拿不到,自然改不动运行时状态;
-#     · 不决定控制流           —— 返回即"继续";要暂停就干脆别配 handler。
+#     · 不决定控制流           —— 返回即"继续"。handler 是必需的(见
+#       engine.primitives.checkpoint 模块 docstring);它若想"现在不答、留到以后
+#       再说",直接在内部抛异常即可,会被 Workflow.run 的通用失败路径接住并允许
+#       之后续跑,不需要靠专门的"暂停"返回值表达。
 #   返回的 dict 怎么用(合并进 inputs / 作为节点产出)由调用方决定,与 handler 无关。
 # 默认实现可以是命令行交互;场景/宿主可替换为 Web 表单、消息队列、审批系统等。
 CheckpointHandler = Callable[[CheckpointRequest], dict[str, Any]]
@@ -73,29 +75,23 @@ class LifecycleHooks:
 
 @dataclass(frozen=True)
 class ResumePoint:
-    """从某个断点(人工 Checkpoint,或未预期的失败)恢复运行所需的全部信息。
+    """从某次未预期的失败恢复运行所需的全部信息。
 
-    无 handler 的异步流程在 Checkpoint 处抛 CheckpointPause 后,宿主据其持久化
-    快照;择机收集到人工输入后,构造一个 ResumePoint 塞进新的 RunContext,再次
-    调用 Workflow.run 即可从断点续跑,而非从头重跑。同样地,顶层节点抛出未捕获
-    异常时 Workflow.run 会包装成 WorkflowFailure(见 engine/workflow.py)冒泡给
-    宿主;宿主可据此构造一个 checkpoint_name=None 的 ResumePoint,下次运行时
-    跳过已成功的前序节点、只重跑失败的那个节点及之后的部分。
+    顶层节点抛出未捕获异常时 Workflow.run 会包装成 WorkflowFailure(见
+    engine/workflow.py)冒泡给宿主;宿主据此持久化后,下次运行时构造一个
+    ResumePoint 塞进新的 RunContext,再次调用 Workflow.run 即可跳过已成功的前序
+    节点、只从失败的这个节点重跑,而非从头重跑整个 workflow。Checkpoint 缺
+    handler(或 handler 自己选择暂缓)时抛出的异常同样走这条路径——Checkpoint
+    不再有专属的暂停/恢复机制(见 engine.primitives.checkpoint 模块 docstring)。
 
     Attributes:
-        node_index:      顶层节点游标——Workflow.run 从该索引处的节点重新开始执行,
-                         从而跳过已完成的前序顶层节点(避免重复调用其 executor)。
-        checkpoint_name: 在哪个断点暂停(与 Checkpoint.name 对应,用于认领恢复输入);
-                         为 None 表示这不是冲着某个 Checkpoint 来的(如失败续跑)——
-                         此时不会被任何 Checkpoint 认领,单纯定位 node_index/inputs。
-        inputs:          暂停/失败时正流入该节点的 inputs;恢复时以它作为续跑的起始输入。
-        resume_input:    挂起期间从人工/外部收集到的输入,由对应 Checkpoint 认领。
+        node_index: 顶层节点游标——Workflow.run 从该索引处的节点重新开始执行,
+                    从而跳过已完成的前序顶层节点(避免重复调用其 executor)。
+        inputs:     失败时正流入该节点的 inputs;恢复时以它作为续跑的起始输入。
     """
 
     node_index: int
-    checkpoint_name: str | None = None
     inputs: dict[str, Any] = field(default_factory=dict)
-    resume_input: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -108,9 +104,9 @@ class RunContext:
         config:             运行配置(如各 Loop 的默认 max_iterations、模型参数等)。
         hooks:              生命周期钩子集合(before/after stage、loop 迭代等),可选。
         trace:              运行轨迹记录器,用于可观测性/调试,可选。
-        resume:             断点恢复信息;非 None 时表示"这是一次续跑",Workflow.run
-                            据此定位起点、对应 Checkpoint 据此认领人工输入。一旦被
-                            Checkpoint 认领即置回 None。
+        resume:             失败续跑信息(见 ResumePoint);非 None 时表示"这是一次
+                            续跑",Workflow.run 据此定位起点、以 resume.inputs 作为
+                            起始输入,跳过已成功的前序顶层节点。
     """
 
     state: StateStore

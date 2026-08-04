@@ -1,7 +1,7 @@
 import unittest
 
-from engine.context import CheckpointRequest, LifecycleHooks, ResumePoint, RunContext
-from engine.primitives.checkpoint import Checkpoint, CheckpointPause
+from engine.context import CheckpointRequest, LifecycleHooks, RunContext
+from engine.primitives.checkpoint import Checkpoint
 from state.backends.memory import InMemoryStateStore
 from state.schema import SchemaError, StateSchema
 
@@ -11,13 +11,11 @@ def _ctx(**kwargs):
 
 
 class CheckpointNoHandlerTests(unittest.TestCase):
-    def test_raises_checkpoint_pause_with_name(self):
+    def test_raises_runtime_error_naming_the_checkpoint(self):
         cp = Checkpoint(name="confirm_outline")
-        with self.assertRaises(CheckpointPause) as ctx_mgr:
+        with self.assertRaises(RuntimeError) as ctx_mgr:
             cp.run(_ctx(), {"draft": "x"})
-        self.assertEqual(ctx_mgr.exception.checkpoint_name, "confirm_outline")
-        # node_index/inputs are filled in later by Workflow, not by Checkpoint itself
-        self.assertIsNone(ctx_mgr.exception.node_index)
+        self.assertIn("confirm_outline", str(ctx_mgr.exception))
 
 
 class CheckpointWithHandlerTests(unittest.TestCase):
@@ -54,42 +52,6 @@ class CheckpointWithHandlerTests(unittest.TestCase):
         ctx = _ctx(checkpoint_handler=lambda r: {}, hooks=hooks)
         cp.run(ctx, {})
         self.assertEqual(calls, ["cp"])
-
-
-class CheckpointResumeTests(unittest.TestCase):
-    def test_resume_matching_name_consumes_resume_point(self):
-        resume = ResumePoint(
-            checkpoint_name="cp", node_index=2, resume_input={"approved": True}
-        )
-        ctx = _ctx(resume=resume)
-        cp = Checkpoint(name="cp")
-
-        result = cp.run(ctx, {"draft": "x"})
-        self.assertEqual(result, {"draft": "x", "approved": True})
-        self.assertIsNone(ctx.resume)
-
-    def test_resume_for_different_checkpoint_name_falls_through(self):
-        resume = ResumePoint(
-            checkpoint_name="other_cp", node_index=0, resume_input={"approved": True}
-        )
-        ctx = _ctx(resume=resume)
-        cp = Checkpoint(name="cp")
-
-        with self.assertRaises(CheckpointPause):
-            cp.run(ctx, {})
-        # unrelated resume point should be left untouched
-        self.assertIsNotNone(ctx.resume)
-
-    def test_resume_input_validated_against_schema(self):
-        resume = ResumePoint(
-            checkpoint_name="cp", node_index=0, resume_input={"approved": "nope"}
-        )
-        ctx = _ctx(resume=resume)
-        cp = Checkpoint(
-            name="cp", resume_input_schema=StateSchema("resume", {"approved": bool})
-        )
-        with self.assertRaises(SchemaError):
-            cp.run(ctx, {})
 
 
 if __name__ == "__main__":

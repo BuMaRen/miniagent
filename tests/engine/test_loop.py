@@ -211,7 +211,7 @@ class LoopCursorHousekeepingTests(unittest.TestCase):
             body=[producer, critic, Checkpoint(name="human_review")],
             continue_when=_flag_path(),
         )
-        ctx = _make_ctx()  # 无 handler -> Checkpoint 抛 CheckpointPause
+        ctx = _make_ctx()  # 无 handler -> Checkpoint 抛 RuntimeError
 
         with self.assertRaises(Exception):
             loop.run(ctx, {})
