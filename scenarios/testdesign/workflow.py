@@ -1,20 +1,16 @@
 from typing import Callable
 
-from engine.primitives.breaker import Breaker
-from engine.primitives.loop import Loop
+from engine.primitives.loop import Loop, OnExceed
 from engine.workflow import Workflow
 from engine.primitives import Sequence
 from llm.client import LLMClient
 from scenarios.testdesign.nodes.first_draft import build_first_draft_node
+from scenarios.testdesign.nodes.pending_check import NEEDS_REDRAFT_KEY, build_pending_check_node
 from scenarios.testdesign.nodes.redraft import build_redraft_node
 from scenarios.testdesign.nodes.requirement_parse import build_requirement_parse_node
 from scenarios.testdesign.nodes.review import build_review_node
 from scenarios.testdesign.nodes.testcase_output import build_testcase_output_node
-from scenarios.testdesign.schemas.state import (
-    DRAFT_KEY,
-    DRAFT_PATH,
-    TEST_DESIGN_STATE_SCHEMA,
-)
+from scenarios.testdesign.schemas.state import TEST_DESIGN_STATE_SCHEMA
 
 # args: stage_name, model_name
 ClientFactory = Callable[[str, str | None], LLMClient]
@@ -27,7 +23,8 @@ def build_workflow(
 
     Args:
         client_factory: LLMClient 工厂函数,用于创建 LLMClient 实例。
-        requirement_doc: 测试需求文档。
+        requirement_doc: 需求文档路径。
+        testcase_output_path: 用例产出 JSON 的落地路径。
 
     Returns:
         Workflow: 测试设计工作流。
@@ -47,15 +44,17 @@ def build_workflow(
         ),
         Loop(
             name="test_case_redraft_loop",
-            continue_when=lambda _, inputs: len(inputs.get(DRAFT_PATH, [])) == 0,
+            # 真 = drafted_cases 仍非空、还要再来一轮 redraft+review(见
+            # nodes/pending_check.py)。没有 checkpoint_handler,跑满
+            # max_iterations 仍未收敛时直接接受最后一版,而不是升级成人工断点
+            # ——workflow.md 里没有为这个流程设计任何人工介入点。
+            continue_when=lambda ctx, outputs: outputs.get(NEEDS_REDRAFT_KEY, False),
             max_iterations=3,
+            on_exceed=OnExceed.ACCEPT_LAST,
             body=[
                 build_redraft_node(client=client_for("redraft")),
                 build_review_node(client=client_for("review")),
-                Breaker(
-                    name="loop_breaker",
-                    predicate=lambda _, inputs: len(inputs.get(DRAFT_PATH, [])) == 0,
-                ),
+                build_pending_check_node(),
             ],
         ),
         build_testcase_output_node(output_path=testcase_output_path),

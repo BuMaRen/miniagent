@@ -31,12 +31,6 @@ FIRST_DRAFT_OUTPUT_SCHEMA = StateSchema(
         DRAFT_PATH: [_TEST_CASE],
     },
 )
-FIRST_DRAFT_INPUT_SCHEMA = StateSchema(
-    "first_draft_input",
-    {
-        DRAFT_PATH: [_TEST_CASE],
-    },
-)
 
 REDRAFT_OUTPUT_SCHEMA = StateSchema(
     "redraft_output",
@@ -44,19 +38,7 @@ REDRAFT_OUTPUT_SCHEMA = StateSchema(
         DRAFT_PATH: [_TEST_CASE],
     },
 )
-REDRAFT_INPUT_SCHEMA = StateSchema(
-    "redraft_input",
-    {
-        DRAFT_PATH: [_TEST_CASE],
-    },
-)
 
-REVIEW_INPUT_SCHEMA = StateSchema(
-    "review_input",
-    {
-        DRAFT_PATH: [_TEST_CASE],
-    },
-)
 REVIEW_OUTPUT_SCHEMA = StateSchema(
     "review_output",
     {
@@ -84,3 +66,8 @@ TEST_DESIGN_STATE_SCHEMA = StateSchema(
         }
     },
 )
+
+
+def empty_state() -> dict:
+    """构造一份符合 schema 的空状态,作为一次新运行的起点。"""
+    return TEST_DESIGN_STATE_SCHEMA.empty()
