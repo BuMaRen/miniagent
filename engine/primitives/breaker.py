@@ -1,11 +1,12 @@
 """Breaker —— 提前终止 Loop/ForEach 的原语。
 
-和 `continue_when` 的分工:`continue_when` 是 Loop 专属的"是非器"(真 = 还要
-重开一轮);Breaker 是一个普通 Node,放在 Loop/ForEach 的 body 里,自带一个
-`predicate(ctx, inputs) -> bool`,为真时立刻终止**最近的**外层 Loop/ForEach——
-对 Loop 相当于"提前放行,接受当前结果结束循环"(区别于 max_iterations 耗尽触发
-的 on_exceed 三选一,这是内容触发而非轮次耗尽触发);对 ForEach 相当于 Python 的
-`break`,停止处理剩余 items。
+和 Continuer(见 engine/primitives/continuer.py)的分工:两者都是放进 Loop/
+ForEach body 里的普通 Node,自带一个 `predicate(ctx, inputs) -> bool`,互不
+知晓对方存在。Breaker 为真时立刻终止**最近的**外层 Loop/ForEach——对 Loop
+相当于"提前放行,接受当前结果结束循环"(区别于 max_iterations 耗尽触发的
+on_exceed 三选一,这是内容触发而非轮次耗尽触发);对 ForEach 相当于 Python 的
+`break`,停止处理剩余 items。Continuer 只对 Loop 生效,为真时相当于 Python 的
+`continue`——跳过本轮 body 剩下的节点,从 body[0] 重开下一轮。
 
 不支持"指定中断到哪一层"(labeled break):嵌套 Loop/ForEach 时,`LoopBreak` 天然
 只被 Python 异常传播路径上最近的 try/except 捕获,已经就是"只断最近一层"。

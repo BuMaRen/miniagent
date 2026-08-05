@@ -1,16 +1,15 @@
 from typing import Callable
 
+from engine.primitives import Breaker, Continuer, Sequence
 from engine.primitives.loop import Loop, OnExceed
 from engine.workflow import Workflow
-from engine.primitives import Sequence
 from llm.client import LLMClient
 from scenarios.testdesign.nodes.first_draft import build_first_draft_node
-from scenarios.testdesign.nodes.pending_check import NEEDS_REDRAFT_KEY, build_pending_check_node
 from scenarios.testdesign.nodes.redraft import build_redraft_node
 from scenarios.testdesign.nodes.requirement_parse import build_requirement_parse_node
 from scenarios.testdesign.nodes.review import build_review_node
 from scenarios.testdesign.nodes.testcase_output import build_testcase_output_node
-from scenarios.testdesign.schemas.state import TEST_DESIGN_STATE_SCHEMA
+from scenarios.testdesign.schemas.state import DRAFT_PATH, TEST_DESIGN_STATE_SCHEMA
 
 # args: stage_name, model_name
 ClientFactory = Callable[[str, str | None], LLMClient]
@@ -44,17 +43,21 @@ def build_workflow(
         ),
         Loop(
             name="test_case_redraft_loop",
-            # 真 = drafted_cases 仍非空、还要再来一轮 redraft+review(见
-            # nodes/pending_check.py)。没有 checkpoint_handler,跑满
-            # max_iterations 仍未收敛时直接接受最后一版,而不是升级成人工断点
-            # ——workflow.md 里没有为这个流程设计任何人工介入点。
-            continue_when=lambda ctx, outputs: outputs.get(NEEDS_REDRAFT_KEY, False),
             max_iterations=3,
+            # 没有 checkpoint_handler,跑满 max_iterations 仍未收敛时直接接受
+            # 最后一版,而不是升级成人工断点——workflow.md 里没有为这个流程
+            # 设计任何人工介入点。
             on_exceed=OnExceed.ACCEPT_LAST,
             body=[
+                # workflow.md "Node" 一节第 3 点:"判断结束使用一个 no-agent 的
+                # Node"。没有待处理用例时, 靠这个 Breaker 直接结束整个 Loop,不必
+                # 再白跑一次 redraft+review。
+                Breaker(
+                    name="pending_check",
+                    predicate=lambda ctx, _inputs: not ctx.state.get(DRAFT_PATH),
+                ),
                 build_redraft_node(client=client_for("redraft")),
                 build_review_node(client=client_for("review")),
-                build_pending_check_node(),
             ],
         ),
         build_testcase_output_node(output_path=testcase_output_path),

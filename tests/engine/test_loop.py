@@ -2,12 +2,13 @@ import unittest
 
 from engine.context import CheckpointRequest, LifecycleHooks, RunContext
 from engine.primitives.checkpoint import Checkpoint
+from engine.primitives.continuer import Continuer
 from engine.primitives.loop import Loop, LoopExceededError, OnExceed
 from state.backends.memory import InMemoryStateStore
 from state.schema import StateSchema
 
-# 场景侧约定的判定字段名。极性是"真 = 还要再来一轮"(见 loop.py 的说明),
-# 所以叫 needs_revision 而不是 passed。
+# 场景侧约定的判定字段名。极性是"真 = 还要再来一轮",所以叫 needs_revision
+# 而不是 passed(见 continuer.py 与 loop.py 的说明)。
 FLAG = "needs_revision"
 
 
@@ -62,22 +63,25 @@ def _cursor(loop_name="loop"):
     return f"_loop.{loop_name}.last"
 
 
-def _continue_when(ctx, outputs):
-    """判定谓词:直接对着刚跑完的节点的 outputs 求值,不经过 State。"""
-    return outputs.get(FLAG, False)
+def _continuer(name="continuer"):
+    """critic 之后放一个"重来一轮"节点:predicate 直接读它收到的 inputs(即
+    critic 刚产出的 outputs)里的 FLAG——与旧版 continue_when 的判定逻辑等价,
+    只是现在是场景方显式放进 body 的一个 Node,而不是引擎自动对每个节点问一遍。
+    """
+    return Continuer(name=name, predicate=lambda ctx, inputs: inputs.get(FLAG, False))
 
 
 class LoopPassesImmediatelyTests(unittest.TestCase):
     def test_single_round_when_nobody_asks_for_another(self):
         producer = _Producer("producer", _cursor())
         critic = _ScriptedCritic("critic", [{FLAG: False, "feedback": ""}])
-        loop = Loop(name="loop", body=[producer, critic], continue_when=_continue_when)
+        loop = Loop(name="loop", body=[producer, critic, _continuer()])
 
         result = loop.run(_make_ctx(), {})
 
         self.assertEqual(producer.calls, 1)
         self.assertEqual(result["_loop"], {"name": "loop", "iterations": 1, "exhausted": False})
-        # 返回值是 body 最后一个节点的产出,加上 _loop 记账。
+        # 返回值是 body 最后一个节点(continuer)透传的 outputs,加上 _loop 记账。
         self.assertFalse(result[FLAG])
 
 
@@ -92,9 +96,7 @@ class LoopRestartTests(unittest.TestCase):
                 {FLAG: False, "feedback": ""},
             ],
         )
-        loop = Loop(
-            name="loop", body=[producer, critic], continue_when=_continue_when, max_iterations=5
-        )
+        loop = Loop(name="loop", body=[producer, critic, _continuer()], max_iterations=5)
 
         result = loop.run(_make_ctx(), {})
 
@@ -111,7 +113,7 @@ class LoopRestartTests(unittest.TestCase):
                 {FLAG: False, "feedback": ""},
             ],
         )
-        loop = Loop(name="loop", body=[producer, critic], continue_when=_continue_when)
+        loop = Loop(name="loop", body=[producer, critic, _continuer()])
 
         loop.run(_make_ctx(), {})
 
@@ -134,40 +136,28 @@ class LoopRestartTests(unittest.TestCase):
                 seen.append(dict(inputs))
                 return producer.run(ctx, inputs)
 
-        loop = Loop(name="loop", body=[_Spy(), critic], continue_when=_continue_when)
+        loop = Loop(name="loop", body=[_Spy(), critic, _continuer()])
         loop.run(_make_ctx(), {"topic": "t"})
 
         self.assertEqual(seen, [{"topic": "t"}, {"topic": "t"}])
 
     def test_stale_flag_does_not_survive_into_the_next_round(self):
-        """游标是整块替换而不是合并:上一轮判定为真的字段不能残留,否则死循环。"""
+        """游标是整块替换而不是合并:上一轮的产出不能残留进下一轮的游标读数。"""
         producer = _Producer("producer", _cursor())
         critic = _ScriptedCritic(
             "critic",
             [{FLAG: True, "feedback": "x"}, {FLAG: False, "feedback": ""}],
         )
-        loop = Loop(
-            name="loop", body=[producer, critic], continue_when=_continue_when, max_iterations=5
-        )
+        loop = Loop(name="loop", body=[producer, critic, _continuer()], max_iterations=5)
 
         result = loop.run(_make_ctx(), {})
 
-        # 若合并,第二轮 producer 之后就会读到上一轮残留的 True 而重开,永远跑不完。
         self.assertEqual(result["_loop"]["iterations"], 2)
-
-    def test_missing_flag_is_falsy_so_producer_does_not_trigger_restart(self):
-        producer = _Producer("producer", _cursor())  # 输出里没有判定字段
-        critic = _ScriptedCritic("critic", [{FLAG: False, "feedback": ""}])
-        loop = Loop(name="loop", body=[producer, critic], continue_when=_continue_when)
-
-        result = loop.run(_make_ctx(), {})
-
-        self.assertEqual(len(critic.calls), 1)
-        self.assertEqual(result["_loop"]["iterations"], 1)
 
 
 class LoopShortCircuitTests(unittest.TestCase):
-    """判定在每个节点之后而非整条 body 之后 —— 前一关没过就不必惊动后一关。"""
+    """Continuer 放在某个节点之后而不是整条 body 之后 —— 前一关没过就不必惊动
+    后一关(与 Breaker 的短路方式完全一致,见 breaker.py)。"""
 
     def test_later_body_nodes_are_skipped_when_an_earlier_one_rejects(self):
         producer = _Producer("producer", _cursor())
@@ -181,72 +171,22 @@ class LoopShortCircuitTests(unittest.TestCase):
         human = _Recorder("human")
         loop = Loop(
             name="loop",
-            body=[producer, ai_critic, human],
-            continue_when=_continue_when,
+            body=[producer, ai_critic, _continuer(), human],
         )
 
         result = loop.run(_make_ctx(), {})
 
-        # 第一轮 AI 判否 -> human 没被执行;第二轮 AI 通过 -> human 才跑一次。
+        # 第一轮 AI 判否 -> continuer 触发重开,human 没被执行;
+        # 第二轮 AI 通过 -> continuer 透传,human 才跑一次。
         self.assertEqual(human.calls, 1)
         self.assertEqual(result["_loop"]["iterations"], 2)
-
-
-class LoopContinuePredicateTests(unittest.TestCase):
-    """continue_when 是一个普通 Python 谓词(ctx, outputs) -> bool,不是状态路径
-    字符串——这里专门验证"谓词可以是任意代码"这条能力,而不只是查一个固定字段。"""
-
-    def test_predicate_can_read_ctx_state_not_just_outputs(self):
-        """谓词拿到的是完整的 ctx,可以看 outputs 之外的状态,不局限于当前节点产出。
-
-        注意:continue_when 在 body 里**每个**节点跑完后都会被调用一次,不只是
-        "评审"那个节点——所以谓词要能安全地应付 producer(没有 score 字段)的
-        outputs,不能假设自己只会被拿判定节点的产出来调用(这正是旧设计里
-        "路径缺失时读到 None、判为假" 这条兜底在新设计下需要谓词自己负责的地方)。
-        """
-        producer = _Producer("producer", _cursor())
-        critic = _ScriptedCritic("critic", [{"score": 1}, {"score": 3}])
-
-        def continue_when(ctx, outputs):
-            if "score" not in outputs:  # 不是评审节点的产出,不参与判定
-                return False
-            # 判定依据来自 ctx.state 里一个和 outputs 无关的字段,证明谓词不是
-            # 被限定只能看"当前节点的 outputs"。
-            ctx.state.patch("attempts", (ctx.state.get("attempts") or 0) + 1)
-            return outputs["score"] < 3
-
-        loop = Loop(name="loop", body=[producer, critic], continue_when=continue_when, max_iterations=5)
-        ctx = _make_ctx()
-
-        result = loop.run(ctx, {})
-
-        self.assertEqual(result["_loop"]["iterations"], 2)
-        self.assertEqual(ctx.state.get("attempts"), 2)
-
-    def test_predicate_polarity_is_still_true_means_restart(self):
-        """引擎侧极性不变:谓词返回 True 才重开一轮,场景可以在谓词内部自由取反
-        (比如让上游节点产出 passed 而不是 needs_revision),不再被"裸路径不能取反"
-        这条限制约束。"""
-        producer = _Producer("producer", _cursor())
-        critic = _ScriptedCritic("critic", [{"passed": False}, {"passed": True}])
-
-        # 上游用的字段名是 passed(真=通过),谓词内部取反成"真=还要重开一轮";
-        # producer 的 outputs 没有 passed 字段,get 的默认值 True 让它在取反后
-        # 恒为 False,不会误触发重开一轮。
-        continue_when = lambda ctx, outputs: not outputs.get("passed", True)
-        loop = Loop(name="loop", body=[producer, critic], continue_when=continue_when)
-
-        result = loop.run(_make_ctx(), {})
-
-        self.assertEqual(result["_loop"]["iterations"], 2)
-        self.assertTrue(result["passed"])
 
 
 class LoopCursorHousekeepingTests(unittest.TestCase):
     def test_cursor_is_cleared_on_normal_exit(self):
         producer = _Producer("producer", _cursor())
         critic = _ScriptedCritic("critic", [{FLAG: False, "feedback": ""}])
-        loop = Loop(name="loop", body=[producer, critic], continue_when=_continue_when)
+        loop = Loop(name="loop", body=[producer, critic, _continuer()])
         ctx = _make_ctx()
 
         loop.run(ctx, {})
@@ -260,7 +200,6 @@ class LoopCursorHousekeepingTests(unittest.TestCase):
         loop = Loop(
             name="loop",
             body=[producer, critic, Checkpoint(name="human_review")],
-            continue_when=_continue_when,
         )
         ctx = _make_ctx()  # 无 handler -> Checkpoint 抛 RuntimeError
 
@@ -282,7 +221,7 @@ class LoopHooksTests(unittest.TestCase):
             "critic",
             [{FLAG: True, "feedback": "x"}, {FLAG: False, "feedback": ""}],
         )
-        loop = Loop(name="loop", body=[producer, critic], continue_when=_continue_when)
+        loop = Loop(name="loop", body=[producer, critic, _continuer()])
 
         loop.run(_make_ctx(hooks=hooks), {})
 
@@ -299,7 +238,7 @@ class LoopHooksTests(unittest.TestCase):
 
 class LoopWithCheckpointInBodyTests(unittest.TestCase):
     """Checkpoint.run() 返回 inputs 与 resume_input 的合并结果,所以人工确认点可以
-    直接当 body 里的一关:人工填的判定字段照样喂给是非器,驱动下一轮重写。"""
+    直接当 body 里的一关:人工填的判定字段照样喂给后面的 Continuer,驱动下一轮重写。"""
 
     def test_human_rejection_drives_another_round(self):
         producer = _Producer("producer", _cursor())
@@ -319,7 +258,7 @@ class LoopWithCheckpointInBodyTests(unittest.TestCase):
             seen_context.append(request.context)
             return next(answers)
 
-        loop = Loop(name="loop", body=[producer, human], continue_when=_continue_when)
+        loop = Loop(name="loop", body=[producer, human, _continuer()])
         result = loop.run(_make_ctx(checkpoint_handler=handler), {})
 
         self.assertEqual(producer.calls, 2)
@@ -334,8 +273,7 @@ class LoopExceedTests(unittest.TestCase):
         critic = _ScriptedCritic("critic", [{FLAG: True, "feedback": "还是不行"}])
         return Loop(
             name="loop",
-            body=[producer, critic],
-            continue_when=_continue_when,
+            body=[producer, critic, _continuer()],
             max_iterations=max_iterations,
             on_exceed=on_exceed,
         )
@@ -375,7 +313,8 @@ class LoopExceedTests(unittest.TestCase):
         self.assertTrue(result["_loop"]["exhausted"])
         self.assertEqual(len(received), 1)
         self.assertEqual(received[0].name, "loop")
-        # 交给人的是最后一轮最后跑完的那个节点的产出 —— 短路时正是驳回它的意见。
+        # 交给人的是最后一轮里、Continuer 触发重开前最后跑完的那个节点(critic)
+        # 的产出 —— 正是驳回它的意见。
         self.assertEqual(received[0].context["feedback"], "还是不行")
 
     def test_unknown_on_exceed_raises_value_error(self):
