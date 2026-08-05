@@ -8,5 +8,5 @@
    Stage 以 reads 注入。换题材不需要改流程侧的任何一个字。
 2. **不设人工断点**:全程无 Checkpoint,Loop 超限一律 accept_last_version,
    跑完直接落地成品。质量把关改由"确定性体检 + LLM Critic"两道关卡承担。
-3. **更短的流水线**:5 个 LLM 节点 + 2 个纯函数节点(见 workflow.yaml)。
+3. **更短的流水线**:5 个 LLM 节点 + 2 个纯函数节点(见 workflow.py)。
 """

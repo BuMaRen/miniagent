@@ -29,7 +29,7 @@
 初读容易把 Node 和 Stage 当成两个平级、职责重叠的概念。它们其实**不在同一层级**:
 
 - **Node 是"协议 / 接口"(Python `Protocol`),不是一个可实例化的类。** 它只规定一件事:凡是想被引擎当成"一步"来驱动的东西,都必须有 `name` 和 `run(ctx, inputs) -> outputs`。Node 本身没有任何实现体。
-- **Stage 是 Node 的具体实现之一。** 除了 Stage,四个控制流原语(Sequence / Loop / ForEach / Checkpoint)也都实现了 Node。**场景方也可以自己写一个满足 Node 的类型**(见 §6.5)。
+- **Stage 是 Node 的具体实现之一。** 除了 Stage,四个控制流原语(Sequence / Loop / ForEach / Checkpoint)也都实现了 Node。**场景方也可以自己写一个满足 Node 的类型**(见 §6.6)。
 
 ```mermaid
 flowchart TB
@@ -110,7 +110,9 @@ StateStore:
 
 ## 6. 控制流原语
 
-四个原语足以组合出目前设想的所有流程形态:
+四个原语(Sequence/Loop/ForEach/Checkpoint)刻画"流程长什么样",足以组合出目前
+设想的所有流程形态;外加一个 `Breaker`(§6.5),用来表达"提前终止"这一种更具体
+的策略,可以放进前面任意一个原语的 body 里:
 
 ### 6.1 Sequence(顺序)
 
@@ -122,8 +124,8 @@ StateStore:
 
 ```
 Loop:
-  body: list[Node]             # 一轮依次执行它们(Sequence 的规则:上一个 outputs 流入下一个 inputs)
-  continue_when: StatePath     # 是非器——每个 body 节点跑完后取它的真假,真则重开一轮
+  body: list[Node]                                  # 一轮依次执行它们(Sequence 的规则:上一个 outputs 流入下一个 inputs)
+  continue_when: (RunContext, dict) -> bool          # 判定谓词——每个 body 节点跑完后拿它的 outputs 求值,真则重开一轮
   max_iterations: int
   on_exceed: raise | escalate_to_checkpoint | accept_last_version
 ```
@@ -131,22 +133,24 @@ Loop:
 每一轮都从**同一份 inputs** 重新开始,轮次之间不累积。一轮内部每个节点跑完做两件事:
 
 1. 把它的 outputs 整块发布到游标 `_loop.<name>.last`(整块**替换**,不是合并);
-2. 读 `continue_when` 指向的状态路径,真则本轮到此为止、从 `body[0]` 重开一轮。
+2. 把这个节点刚产出的 outputs(以及 `ctx`)交给 `continue_when` 判定谓词求值,真则本轮到此为止、从 `body[0]` 重开一轮。
 
-第 2 条是这个原语唯一的判定机制,刻意做成"读一条状态路径取真假",于是:
+第 2 条是这个原语唯一的判定机制。判定谓词的签名是 `(RunContext, dict) -> bool`,和 `Breaker` 的 `predicate` 是同一种风格(§6.5)——引擎只管调用这个函数、取返回值真假:
 
-- **引擎不认识任何业务字段名。** 没有 `passed` 也没有 `feedback`,判定字段叫什么、由谁产出,全在 `workflow.yaml` 里指给它看。这与 §6.5 的判断标准一致:"什么情况下算合格"是场景的事。
-- **不需要表达式语言,也不需要场景侧的谓词回调。** 真需要复杂判定的场景,就在 `body` 里加一个节点把结果算出来写进 State——计算属于节点,不属于一个特殊槽位。
-- **极性是固定的:真 = 还要再来一轮。** 所以被读的字段要朝着"还得改"为真去命名(如 `needs_revision`)而不是 `passed`——裸路径取真假没有取反的余地,这是刻意的:一旦支持取反就得引入表达式语言。
-- 路径缺失时读到 `None`、判为假,所以 `body` 里不产出判定字段的节点(比如生成节点)不会误触发重开一轮。
+- **引擎不认识任何业务字段名。** 没有 `passed` 也没有 `feedback`,判定字段叫什么、由谁产出,全在场景方写的这段谓词函数体内部,和引擎无关。这与 §6.6 的判断标准一致:"什么情况下算合格"是场景的事。
+- **不需要表达式语言。** 判定谓词就是一段普通 Python 代码,真需要复杂判定,直接在函数体里写;也可以在 `body` 里先加一个节点把结果算出来写进 State,谓词只需要读那个字段——两种写法都行,原语不限定。
+- **引擎侧极性是固定的:谓词返回 `True` = 还要再来一轮。** 但谓词内部想用什么字段名、要不要取反,是场景自己的事——不再是"裸路径读真假没有取反的余地"那种硬限制;约定俗成仍建议让上游节点把字段朝着"还得改"为真去命名(如 `needs_revision`),这样谓词往往一行 `lambda ctx, outputs: outputs.get("needs_revision", False)` 就够了。
+- 谓词会在 `body` 里**每一个**节点跑完后都被调用一次,不只是"评审"那一个——所以要用 `outputs.get(key, False)` 这类防御性写法,而不是 `outputs[key]`:生成类节点的 outputs 里通常没有判定字段,`.get` 的默认值 `False` 保证它不会被误判成"要求重开一轮"。
 
-第 1 条的游标顺带解决"下一轮怎么知道上一轮为什么没过":`body[0]` 用普通的 `reads=["_loop.<name>.last"]` 就能读到上一个节点的产出(通常正是驳回它的那份评审意见)。整块替换而非合并是正确性要求——否则上一轮的判定字段会残留,是非器读到陈旧的真值就永远重开。循环正常结束时游标被清掉,避免泄漏给后续节点、也避免大对象长期躺在持久化快照里;但 `body` 里的 `Checkpoint` 暂停时**不清**,续跑还要靠它读回意见。
+> 这处从"状态路径字符串"改成"判定谓词"是有历史原因的:框架早期支持从声明式 YAML 装配 Workflow,那时 `continue_when` 必须是一条能写进 YAML 的字符串,判定逻辑因此被设计成"读一条状态路径取真假"。声明式装配已经从框架里移除(场景方现在直接用 Python 组装 `Workflow`,见 §7),这层限制不再存在,判定逻辑因此可以直接是一段可读、可调试、IDE 能跳转的函数,不必再拼一条容易打错字的状态路径。
 
-判定放在**每个节点之后**而不是整条 `body` 之后,于是"多道关卡"是白拿的:`body: [生成, AI 评审, 人工确认]` 天然就是"AI 先挡掉明显问题、通过后才让人工把关",且 AI 判否时人工那一关根本不执行(不必拿一份 AI 都没过的草稿去打扰人)。**这是它取代早期那个 `producer/critic/reviser` 三槽位版本的主要理由**:那个版本把三个节点的角色写死在引擎里,而"生成"与"修订"在实践中往往是同一个节点(游标为空就是生成,游标里带着意见就是修订),"评审"又往往不止一关——都是场景自己的编排,不该由原语规定。
+第 1 条的游标解决的是另一件独立的事——"下一轮怎么知道上一轮为什么没过":`body[0]` 用普通的 `reads=["_loop.<name>.last"]` 就能读到上一个节点的产出(通常正是驳回它的那份评审意见)。整块替换而非合并是正确性要求——否则上一轮的判定字段会残留,下一轮读到陈旧的产出可能引发误判。循环正常结束时游标被清掉,避免泄漏给后续节点、也避免大对象长期躺在持久化快照里;但 `body` 里的 `Checkpoint` 暂停时**不清**,续跑还要靠它读回意见。游标机制与判定谓词是两件独立的事:判定谓词直接对着刚跑完的节点的 outputs 求值,不需要经过游标、也不需要经过 State 走一趟。
+
+判定放在**每个节点之后**而不是整条 `body` 之后,于是"多道关卡"是白拿的:`body: [生成, AI 评审, 人工确认]` 天然就是"AI 先挡掉明显问题、通过后才让人工把关",且 AI 判否时人工那一关根本不执行(不必拿一份 AI 都没过的草稿去打扰人)。**这是它取代早期那个 `producer/critic/reviser` 三槽位版本的主要理由**:那个版本把三个节点的角色写死在引擎里,而"生成"与"修订"在实践中往往是同一个节点(游标为空就是生成,游标里带着意见就是修订),"评审"又往往不止一关——都是场景自己的编排,不该由原语规定。同一个 `continue_when` 谓词会在 body 里每个可能给出判定的节点(如 AI 评审、人工确认)跑完后各被调用一次——只要它们的 outputs 形状一致,一个谓词天然能同时服务多个节点,不需要分别包装。
 
 返回值是最后一个节点的 outputs,外加一份 `_loop: {name, iterations, exhausted}` 记账,让循环后面的节点能区分"是通过了"还是"跑满轮次被 `on_exceed` 放行的",而不必自己猜。
 
-**本原语不对返回值做任何投影或裁剪**,所以它可能带着一些循环内部的中间字段(典型如最后那一关的判定与评审意见)按通道①流进循环后面的节点。这是刻意不管的:`Loop` 对外的正式接口是"从 `continue_when` 这条状态路径读、往 `_loop.<name>.last` 这条状态路径写",两头都在 State 上;至于要不要把它的 outputs 当作后续节点的 inputs 来用,是场景方在自己的 Workflow 定义里决定的事,而每个节点真正需要什么本来就该由它自己的 `reads` 声明。原语不替场景猜"哪些字段该留、哪些该扔"——那是业务语义,不是控制流形状(§6.5)。
+**本原语不对返回值做任何投影或裁剪**,所以它可能带着一些循环内部的中间字段(典型如最后那一关的判定与评审意见)按通道①流进循环后面的节点。这是刻意不管的:`Loop` 对外的正式接口是"body 里每个节点跑完后把 outputs 交给 continue_when 判定、往 `_loop.<name>.last` 这条状态路径写游标";至于要不要把它的 outputs 当作后续节点的 inputs 来用,是场景方在自己的 Workflow 定义里决定的事,而每个节点真正需要什么本来就该由它自己的 `reads` 声明。原语不替场景猜"哪些字段该留、哪些该扔"——那是业务语义,不是控制流形状(§6.6)。
 
 ### 6.3 ForEach(遍历子流程)
 
@@ -164,7 +168,7 @@ ForEach:
 
 而"各项之间保持连贯"(逐章写作时第 N 章要看到前 N-1 章的产物)**不是 ForEach 的职责**:它是 body 里各 Stage 对共享 State Store 做 `reads`/`writes` 的自然结果。所以这里既没有、也不需要 `shared_state` 之类的开关。小说里的"逐章撰写"就是 `ForEach(chapters, body=Loop(draft, review, revise))`,其连贯性来自 body 内部读一份滚动摘要 / 故事圣经,而非 ForEach 把前文全喂回去(见 §5 上下文成本控制)。
 
-游标 `index_path` 存在 State Store 里,因此"从中断处恢复"是白捡的:从 Checkpoint 快照续跑时,发现下标已有值就接着往下走。整个节点全由数据字段描述,可从 §7 的 YAML 直接拼出,不含任何运行期回调。
+游标 `index_path` 存在 State Store 里,因此"从中断处恢复"是白捡的:从失败点续跑时,发现下标已有值就接着往下走。整个节点全由数据字段描述,场景方在 `workflow.py` 里直接 `ForEach(...)` 构造即可,不含任何运行期回调。
 
 ### 6.4 Checkpoint(人工断点)
 
@@ -176,7 +180,28 @@ Checkpoint:
 
 流程执行到这里暂停,等待外部输入后再继续。是否设置、设置在哪里,完全由场景方在 Workflow 定义里决定,引擎只提供"能暂停并恢复"这个能力。
 
-### 6.5 场景自定义节点 —— 不该新增原语的那些情况
+### 6.5 Breaker(提前终止)
+
+```
+Breaker:
+  name: str
+  predicate: (RunContext, dict) -> bool   # 真则立即终止最近的外层 Loop/ForEach
+```
+
+放进 `Loop`/`ForEach` 的 `body` 里的一个普通 Node:`predicate` 为真时抛出内部异常
+`LoopBreak`,由最近的外层 `Loop` 或 `ForEach` 捕获并立即收尾——对 `Loop`相当于
+"提前放行、接受当前结果结束循环"(不同于跑满 `max_iterations` 触发的 `on_exceed`
+三选一,这是内容触发而非轮次耗尽触发);对 `ForEach` 相当于 Python 的 `break`,
+停止处理剩余元素。嵌套时不支持"指定跳出到哪一层":`LoopBreak` 沿 Python 异常的
+传播路径,天然只被最近一层的 `try/except` 接住。
+
+和 `Loop` 的 `continue_when`(§6.2)是两件独立的事,互不知晓对方存在:
+`continue_when` 只回答"这一轮/这一项算不算过";`Breaker` 回答的是一个完全独立的
+问题——"不管这一轮/这一项过没过,现在就提前结束整个循环"。两者可以在同一个
+`body` 里共存(见 `scenarios/examples/combined_example.py` 的组合演示)。完整设计
+说明见 `engine/primitives/breaker.py` 模块 docstring。
+
+### 6.6 场景自定义节点 —— 不该新增原语的那些情况
 
 上面四个原语刻意都是**控制流的形状**(顺序、循环、遍历、暂停),它们与场景无关,因此值得放进引擎。但很多需求虽然长得像"要一个新原语",本质上却是**某种策略**——策略属于场景,不属于引擎。
 
@@ -184,7 +209,7 @@ Checkpoint:
 
 需要后者时,场景方**不必也不应该改引擎**:`Node` 是一个 Protocol(结构化类型),只要写一个带 `name` 和 `run(ctx, inputs) -> outputs` 的类,就自动是合法的 Node,可以直接塞进 `Loop.body`、`Sequence.nodes`、`ForEach.body`,与内置原语平起平坐——不需要继承任何基类,也不需要在引擎里登记类型。
 
-一个真实例子(小说场景的 `_ChapterHumanReviewCheckpoint`,见 `scenarios/novel/executors.py`):它包住一个真正的 `Checkpoint`,在其返回之后补一刀状态写回(人工判否时把该章 status 打回 `drafted`)。"暂停/恢复"是控制流、归引擎;"人工判否之后该改哪个字段"是业务策略、归场景。
+一个真实例子(小说场景的 `_ChapterHumanReviewCheckpoint`,见 `scenarios/novel/nodes/chapter.py`):它包住一个真正的 `Checkpoint`,在其返回之后补一刀状态写回(人工判否时把该章 status 打回 `drafted`)。"暂停/恢复"是控制流、归引擎;"人工判否之后该改哪个字段"是业务策略、归场景。
 
 反面教材也值得记一笔:早期版本里,"AI critic 先挡掉明显问题、通过后再让人工把关"曾经是场景侧一个自定义的 `ReviewChain` 节点(把多个 critic 串起来短路求值,整体顶替 `Loop` 的 `critic` 槽位)。它之所以存在,是因为当时的 `Loop` 把 `producer/critic/reviser` 三个角色写死在引擎里、只留一个 critic 槽位。§6.2 改成 `body` + 每节点判定之后,"多道关卡"变成 `body` 里多列一项,那个自定义节点就被删掉了——**原语的形状选错时,成本会以"场景侧不得不写的胶水"的形式冒出来**,这也是判断原语是否选对的一个信号。
 
@@ -192,94 +217,89 @@ Checkpoint:
 
 ## 7. Workflow 定义 —— 场景方的组合方式
 
-场景方通过组合以上原语 + 提供 State Schema + 挂载 ToolSet 来定义一个具体工作流,形式上类似:
+场景方通过组合以上原语 + 提供 State Schema + 挂载 ToolSet 来定义一个具体工作流。做法是在场景包的 `workflow.py` 里写一个 `build_workflow(client_factory)` 函数,直接用 Python 构造 `Sequence`/`Loop`/`ForEach`/`Checkpoint`,把各节点(通常来自 `nodes/` 下按业务分组的 `build_xxx_stage()` 函数)拼成一棵 `Node` 树,形状上类似:
 
-```yaml
-workflow: <场景名称>
-state_schema: <指向该场景的 State Schema 定义>
+```python
+def build_workflow(client_factory: ClientFactory) -> Workflow:
+    nodes = [
+        Sequence(name="setup", nodes=[build_stage_a(...), build_stage_b(...)]),
 
-stages:
-  - sequence: [stage_a, stage_b]
+        Loop(
+            name="stage_c_review",
+            body=[build_stage_c(...), build_stage_c_critic(...)],   # 一轮依次跑它们
+            continue_when="_loop.stage_c_review.last.needs_revision",  # 真则重开一轮
+            max_iterations=3,
+            on_exceed=OnExceed.ESCALATE_TO_CHECKPOINT,
+        ),
 
-  - loop:
-      name: stage_c_review
-      body: [stage_c, stage_c_critic]        # 一轮依次跑它们
-      continue_when: _loop.stage_c_review.last.needs_revision   # 真则重开一轮
-      max_iterations: 3
-      on_exceed: escalate_to_checkpoint
+        Checkpoint(name="confirm_before_continue", resume_input_schema=CRITIC_OUTPUT_SCHEMA),
 
-  - checkpoint: confirm_before_continue
+        ForEach(
+            name="stage_d_loop",
+            items_path="<某个列表状态字段>",  # 逐个遍历它;当前元素每轮发布到游标 item_path
+            body=Loop(                        # body 里的 Stage 用 reads=[item_path] 读当前元素
+                name="stage_d_review",
+                body=[build_stage_d(...), build_stage_d_critic(...)],
+                continue_when="_loop.stage_d_review.last.needs_revision",
+                max_iterations=2,
+            ),
+        ),
 
-  - foreach:
-      items_path: <某个列表状态字段>   # 逐个遍历它;当前元素每轮发布到游标 item_path
-      body:                            # body 里的 Stage 用 reads=[<item_path>] 读当前元素
-        loop:
-          name: stage_d_review
-          body: [stage_d, stage_d_critic]
-          continue_when: _loop.stage_d_review.last.needs_revision
-          max_iterations: 2
-
-  - sequence: [stage_e, stage_f]
+        Sequence(name="wrap_up", nodes=[build_stage_e(...), build_stage_f(...)]),
+    ]
+    return Workflow(name="<场景名称>", nodes=nodes, state_schema=SOME_STATE_SCHEMA)
 ```
 
-这份定义完全没有出现"大纲""章节""小说"这类词——它是纯结构:它只说"这些节点怎么串",不说"每个节点是什么"。后者是 §7.2 那份 `stages.yaml` 的职责。小说生成工作流就是往这两个结构里填入具体的 Stage、ToolSet 和 State Schema 之后得到的一个实例。
+`build_workflow` 只负责"这些节点怎么串"("外层组装");"每个节点是什么"(谁执行、读写哪些状态切片、输出要符合哪份契约)是 `nodes/` 下各模块 `build_xxx_stage()` 函数的职责——两者分工与之前用 YAML 表达时完全一致,只是不再经过一层解析器,场景方直接写 Python。小说生成工作流(`scenarios/novel/workflow.py`)与短篇生成工作流(`scenarios/short/workflow.py`)都是这个模式的真实实例,细节见 [scenarios/development-guide.md](../scenarios/development-guide.md)。
 
-### 7.1 model —— 按子树指定模型
+### 7.1 model —— 按节点指定模型
 
-任意一个节点(`sequence`/`loop`/`foreach` 的容器,或单个 stage 引用)都可以额外标注一个 `model` 字段,和该节点自己的原语关键字同级出现:
+`ClientFactory` 的签名是 `(stage_name: str, model: str | None) -> LLMClient`,由场景方的 `run.py` 提供(通常按 `model` 分组、惰性构造并复用 client,见 `scenarios/novel/run.py` 的 `make_client_factory`)。哪个节点用哪个模型,由 `build_workflow` 在调用 `client_factory` 时**直接传字面量**决定,不需要框架另外提供继承/解析机制:
 
-```yaml
-stages:
-  - sequence: [concept_expansion, character_world_design]
-    model: claude-sonnet-5   # 这个 sequence 及其包含的两个 Stage 都用这个模型
+```python
+def client_for(stage_name: str, model: str | None = None) -> LLMClient:
+    return client_factory(stage_name, model)
 
-  - loop:
-      name: outline_loop
-      body: [outline_generation, outline_critic]
-      continue_when: _loop.outline_loop.last.needs_revision
-    model: claude-sonnet-5   # 这个 loop 及其 body 里的两个 Stage 都用这个模型
-
-  - stage: chapter_critic
-    model: claude-haiku-4-5   # 单个 Stage 也可以单独覆盖
+nodes = [
+    Sequence(
+        name="setup",
+        nodes=[
+            build_concept_expansion_stage(client_for("concept_expansion", "claude-sonnet-5")),
+            build_character_world_design_stage(
+                client_for("character_world_design", "claude-sonnet-5")
+            ),
+        ],
+    ),
+    # 其余节点不传 model(即传 None),退回 client_factory 自己的默认模型。
+    Loop(name="outline_loop", body=[build_outline_generation_stage(client_for("outline_generation")), ...], ...),
+]
 ```
 
-子节点没有自己标注 `model` 时,继承最近的祖先节点声明的值,一路向下直到某个子节点自己覆盖为止;从未被任何祖先标注过的叶子 Stage,退回场景方 `client_factory` 的默认模型。这件事由 `engine.workflow.Workflow.resolve_stage_models` 在 Stage 对象真正被构造之前完成一次轻量的树形扫描(必须在那之前,因为 Stage 内部的 `LLMClient` 一旦造好就定死了),产出一份 `{stage 名: model}` 映射,交给场景方在 `client_factory(stage_name, model)` 里按 `model` 选择/复用对应的 Provider client(见 `scenarios/novel/run.py` 的 `make_client_factory`)——引擎本身不关心某个模型名具体对应哪个 Provider 的 SDK,那仍是场景方 `client_factory` 的职责。
+"一组节点共用同一个模型"就是在 Python 里把同一个字面量传给这组节点各自的 `client_for` 调用,不需要"标注 + 按树形继承"这类额外机制——这原本就是声明式配置模拟命令式代码的地方,直接写 Python 反而更直接。引擎本身不关心某个模型名具体对应哪个 Provider 的 SDK,那是场景方 `client_factory` 的职责(见 `scenarios/novel/run.py` 的 `_infer_provider`)。
 
-### 7.2 Node 的声明式定义 —— `stages.yaml`
+### 7.2 节点怎么定义
 
-`workflow.yaml` 说"节点怎么串",`stages.yaml` 说"每个节点是什么":谁执行、读写哪些状态切片、输出要符合哪份契约。两份都由框架解析(`engine/spec.py` 的 `build_node_registry`),场景侧因此不必再手写 `build_xxx_stage()` 这类装配胶水。
+每个节点由 `nodes/` 下对应模块的一个 `build_xxx_stage(client)` 函数负责组装,直接构造 `Stage`(见 §3.2)或先构造 `Stage`/`Checkpoint` 再按需包一层(见 §6.6):
 
-```yaml
-defaults:                       # 可选:合并进每个 agent executor 的缺省字段
-  executor:
-    max_steps: 8
-
-stage_a:                        # ① executor 是字符串 -> 按名查 ExecutorRegistry
-  executor: stage_a_executor    #    (场景侧用 @executor 装饰器登记的普通函数)
-  writes: [some.path]
-
-stage_c:                        # ② executor 是 dict -> 现场装配一个 Agent
-  executor:
-    model: <可选,见 §7.1>
-    tools: [toolset_y, toolset_z]     # 按名查 ToolSetRegistry
-    output_schema: stage_c_output     # 按名查 SchemaRegistry
-    prompt: "@stage_c_prompt"         # 按名查 PromptRegistry
-  reads: [some.path]
-  writes: [other.path]
-
-confirm_before_continue:        # ③ checkpoint -> 人工断点
-  checkpoint:
-    prompt: 请确认……
-    resume_input_schema: critic_output
+```python
+def build_stage_c_stage(client: LLMClient) -> Stage:
+    agent = make_agent(client, prompts.STAGE_C, toolsets=(toolset_y, toolset_z), output_schema=STAGE_C_OUTPUT_SCHEMA)
+    return Stage(
+        name="stage_c",
+        executor=agent.run,
+        reads=["some.path"],
+        writes=["other.path"],
+        output_schema=STAGE_C_OUTPUT_SCHEMA,
+    )
 ```
 
-**引用规则**:`executor`/`output_schema`/`tools` 的值本身是对象,YAML 里写得下的只有名字,所以裸字符串一律视为"去对应注册表按名检索";`prompt` 的值本身就是文本,裸字符串没法区分正文与名字,所以引用要显式写成 `"@名字"`。⚠️ `@` 是 YAML 的保留指示符,**必须加引号**,否则 `yaml.safe_load` 直接报错。
+`make_agent` 是场景方在自己的 `nodes/common.py` 里写的一个小工具函数(组装 `Agent` + `ConversationMemory` + 挂载 `ToolSet`),不是框架强制的接口——`Stage.executor` 只要求签名是 `(ctx, inputs) -> outputs`,`Agent.run` 天然满足,普通函数也可以(纯函数节点如字数校验、默认值填充直接写函数,不必包一层 Agent)。
 
-**提示词**放在磁盘上的 `*.prompt` 文件里(`prompts/` 包扫描整目录登记)。正文里独占一行的 `@其它提示词名` 会被替换成那段提示词的正文,共享片段(风格基调、通用约束)因此只写一份;`@output_schema_example` 这个占位符则由框架用该节点 `output_schema` 的示例 JSON 填上,提示词里不必手抄一份格式说明(没写这个占位符时,框架把它追加到提示词末尾)。
+**提示词**是场景包 `prompts.py` 里的模块级字符串常量(见 `scenarios/novel/prompts.py`、`scenarios/short/prompts.py`);共享片段(风格基调、通用约束)提成一个常量,其余提示词用字符串拼接复用,不需要框架提供"一段提示词里引用另一段"的展开机制。
 
-**model 的优先级**:`workflow.yaml` 上标注/继承下来的(编排层)优先于 `stages.yaml` 里节点自带的默认值;两处都没有时传给 `client_factory` 的 model 为 `None`。
+**输出格式**不需要在提示词里手写示例:`Agent` 带 `output_schema` 时会走 Provider 的结构化输出模式(见 §4),字段与类型由协议保证,不必在提示词里追加一段 JSON 示例。
 
-声明式定义表达不了的东西(比如某个评审节点在过审后还要旁路写回一段状态),仍然可以在场景侧用 Python 处理:先按 `stages.yaml` 建出节点,再用 `NodeRegistry.replace()` 把它换成一个包了一层的 Node——包装体同样只需满足 Node 协议(见 §3.1、§6.5)。
+节点自身表达不了的副作用(比如某个评审节点在过审后还要旁路写回一段状态),直接在场景侧写一个满足 Node 协议的包装类,把原节点包在里面即可(见 §6.6、`scenarios/novel/nodes/chapter.py` 的 `_ChapterCriticWithStatusWriteback`)——不需要框架提供额外的"包装器注册"机制。
 
 ## 8. 二次开发指南
 
@@ -291,7 +311,7 @@ confirm_before_continue:        # ③ checkpoint -> 人工断点
 4. **识别需要对列表重复处理的环节**(如"逐章"/"逐条"),套一层 `ForEach`。
 5. **决定哪些节点需要人工介入**,插入 `Checkpoint`;如果人工审阅该落在某个已有 `Loop` 的评审环节里(而不是生成完之后再单独确认),直接把它加在该 `Loop` 的 `body` 末尾——排在 AI critic 之后,于是 AI 判否时它会被短路跳过,而它自己判否时同样驱动下一轮重写。
 6. **为每个 Stage 开发/挂载 ToolSet**——这是主要的开发工作量所在,流程结构(2–5 步)通常一次设计好之后很少再变。
-7. 把 2–6 步的结论写成两份声明:`stages.yaml`(每个节点是什么,见 §7.2)与 `workflow.yaml`(节点怎么串,见 §7);提示词落在 `prompts/*.prompt`、输出契约落在 `schemas/*.yaml`。场景侧的 Python 只剩纯函数 executor、ToolSet,以及声明式表达不了的那点副作用。
+7. 把 2–6 步的结论落成代码:`nodes/` 下按业务分组、每个模块提供 `build_xxx_stage()`(每个节点是什么,见 §7.2),`workflow.py` 的 `build_workflow()` 把它们拼成 `Workflow`(节点怎么串,见 §7);提示词落在 `prompts.py`,输出契约落在各 `nodes/*.py` 里挨着对应 Stage 声明。
 8. 组装 LLMClient / StateStore / RunContext 并运行。
 
 ## 9. 已验证的实例:小说生成

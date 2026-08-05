@@ -9,35 +9,48 @@
 的 inputs。每个节点跑完之后做两件事:
 
   1. 把它的 outputs 整块发布到游标 ``_loop.<name>.last``(整块替换,不是合并);
-  2. 读 ``continue_when`` 指向的状态路径,真 -> 本轮到此为止、从 body[0] 重开一轮。
+  2. 把这个节点刚产出的 outputs(以及 ctx)交给 ``continue_when`` 这个谓词函数,
+     真 -> 本轮到此为止、从 body[0] 重开一轮。
 
-第 2 条就是"是非器":引擎只做一次 ``ctx.state.get(path)`` 取真假,**不认识任何业务
-字段名**(既没有 passed 也没有 feedback),更不需要表达式语言或场景侧的谓词回调。
-路径缺失时 get 返回 None、判为假,所以 body 里那些不产出判定字段的节点(比如
-producer)不会误触发重开一轮。
+第 2 条的判定契约是 ``ContinuePredicate = Callable[[RunContext, dict], bool]``,
+和 Breaker 的 predicate 是同一种签名风格(见 engine/primitives/breaker.py)——引擎
+只管调用这个函数、取它的返回值真假,**不认识任何业务字段名**(既没有 passed 也
+没有 feedback,那些字段名字全在场景自己写的谓词函数体内部),更不需要表达式语言。
+这条判定谓词是场景方在构造 `Loop` 时传入的普通 Python 函数,不是状态路径字符串
+——过去(声明式 YAML 装配的时代)`continue_when` 必须是一条能写进 YAML 的字符串,
+现在场景方直接用 Python 组装 Workflow,不再有这层限制,判定逻辑因此可以直接是
+一段可读、可调试、IDE 能跳转的函数体,而不是拼一条容易打错字的状态路径。
 
-极性是固定的:**真 = 还要再来一轮**。所以被读的那个字段要朝着"还得改"为真去命名
-(如 needs_revision),而不是 passed —— 裸路径读真假没有取反的余地,这是刻意的:
-一旦支持取反就得引入表达式语言。
+极性依然是固定的:**谓词返回 True = 还要再来一轮。** 引擎侧的极性没有变(仍然是
+"真 = 还要再来一轮",不支持反过来),但谓词内部想用什么字段名、要不要在函数体里
+对某个字段取反,完全是场景自己的事——不再像"裸路径读真假"那样被限制死,只是
+约定俗成仍然建议把上游节点自己产出的字段朝着"还得改"为真去命名(如
+needs_revision 而不是 passed),这样谓词往往能写成一行 `lambda ctx, outputs:
+outputs.get("needs_revision", False)`,不需要额外取反。
 
 第 1 条的游标同时解决"下一轮怎么知道上一轮为什么没过":body[0] 用普通的
 ``reads=["_loop.<name>.last"]`` 就能读到上一个节点的产出(通常正是驳回它的那份
 评审意见)。手法与 ForEach 发布 ``_foreach.<name>.item`` 完全一致——跨轮次要传的
 东西走保留状态路径,不走"merge 进 inputs"。整块替换而非合并很关键:否则上一轮的
-判定字段会残留到下一轮,是非器读到陈旧的真值就会永远重开。
+判定字段会残留到下一轮,谓词读到陈旧的真值就会永远重开。这一条游标机制与判定谓词
+是两件独立的事:游标只负责"跨轮次传数据",判定谓词直接对着刚跑完的节点的 outputs
+求值,不需要经过游标、也不需要经过 State 走一趟。
 
 短路是白拿的:判定放在**每个节点之后**而不是整条 body 之后,所以
 ``body: [outline_generation, outline_critic, confirm_outline]`` 里 AI 评审判否时,
 后面的人工确认根本不会执行——不必拿一份 AI 都没过的草稿去打扰人。这正是它能取代
-场景侧手写 ReviewChain 的原因。
+场景侧手写 ReviewChain 的原因。同一个 `continue_when` 谓词会在 AI 评审、人工确认
+两个节点跑完后各被调用一次——只要两者的 outputs 形状一致(如都返回
+`{needs_revision, feedback}`),同一个谓词天然能同时服务两者,不需要分别包装。
 
 **返回值只是"最后一个 body 节点的 outputs + 一份 _loop 记账",本原语不做任何投影
 或裁剪。** 于是它可能带着一些循环内部的中间字段(典型如最后那一关的判定与评审
-意见)按通道①流进循环后面的节点。这是刻意不管的:Loop 对外的正式接口是"从
-continue_when 这条状态路径读、往 _loop.<name>.last 这条状态路径写",都在 State 上;
-至于要不要把它的 outputs 当作后续节点的 inputs 来用,是场景方在自己的 Workflow
-定义里决定的事,而每个节点真正需要什么本来就该由它自己的 reads 声明。原语不替场景
-猜"哪些字段该留、哪些该扔"——那是业务语义,不是控制流形状(见 §6.5 的判断标准)。
+意见)按通道①流进循环后面的节点。这是刻意不管的:Loop 对外的正式接口是"body 里
+每个节点跑完后把 outputs 交给 continue_when 谓词、往 _loop.<name>.last 这条状态
+路径写游标";至于要不要把它的 outputs 当作后续节点的 inputs 来用,是场景方在自己
+的 Workflow 定义里决定的事,而每个节点真正需要什么本来就该由它自己的 reads 声明。
+原语不替场景猜"哪些字段该留、哪些该扔"——那是业务语义,不是控制流形状(见 §6.5
+的判断标准)。
 
 与 Breaker(见 engine/primitives/breaker.py)的分工:continue_when 是"是非器",
 只回答"这一轮算不算过";Breaker 是放进 body 里的普通 Node,回答的是一个完全独立
@@ -50,7 +63,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 from engine.stage import Node, StatePath
 from engine.context import CheckpointRequest, RunContext
@@ -67,6 +80,13 @@ def loop_cursor_path(name: str) -> StatePath:
     return f"_loop.{name}.last"
 
 
+# 判定谓词:body 里每个节点跑完后,拿它的 outputs(以及 ctx,供需要读取更多状态的
+# 场景使用)求值一次;真 = 还要重开一轮。与 engine.primitives.breaker.BreakerPredicate
+# 是同一种签名风格,便于场景方记忆——两者都是"给引擎一个可调用对象,引擎只管调用、
+# 取返回值真假",区别只在语义(continue 还是 break)。
+ContinuePredicate = Callable[[RunContext, dict[str, Any]], bool]
+
+
 class OnExceed(str, Enum):
     """达到 max_iterations 仍未通过时的策略。"""
 
@@ -81,18 +101,19 @@ class Loop:
 
     Attributes:
         name:           循环名称(用于日志/断点定位,以及拼出游标路径)。
+        continue_when:  判定谓词 `(ctx, outputs) -> bool`;body 里每个节点跑完后,
+                        拿它的 outputs 求值一次,真则本轮到此为止、从 body[0]
+                        重开一轮。典型写法是
+                        `lambda ctx, outputs: outputs.get("needs_revision", False)`。
         body:           一轮要依次执行的节点(Sequence 的规则:上一个 outputs 流入
                         下一个 inputs)。每个节点跑完都会被问一次 continue_when。
-        continue_when:  是非器——一条状态路径;每个节点跑完后取它的真假,真则本轮
-                        到此为止、从 body[0] 重开一轮。通常指向游标里的判定字段,
-                        如 "_loop.outline_loop.last.needs_revision"。
         max_iterations: 最多跑几轮,防止死循环。
         on_exceed:      跑满 max_iterations 仍在要求重来时的策略。
     """
 
     name: str
+    continue_when: ContinuePredicate
     body: list[Node] = field(default_factory=list)
-    continue_when: StatePath = ""
     max_iterations: int = 3
     on_exceed: OnExceed = OnExceed.ESCALATE_TO_CHECKPOINT
 
@@ -122,7 +143,7 @@ class Loop:
                         ctx.hooks.after_loop_iteration(self.name, i, True)
                     return self._finish(ctx, brk.outputs, iterations=i + 1, exhausted=False)
                 self._publish(ctx, current)
-                if bool(ctx.state.get(self.continue_when)):
+                if bool(self.continue_when(ctx, current)):
                     restart = True
                     break  # 短路:本轮 body 剩下的节点不再执行。
 
@@ -168,8 +189,8 @@ class Loop:
         写的是父路径 ``_loop.<name>``、值是 ``{"last": outputs}``:StateStore.patch
         对 dict 是**浅**合并,所以 last 这个 key 的值会被整体换掉,而不是和上一个
         节点的产出混在一起。这一点是正确性的关键——若合并,上一轮判定为真的那个
-        字段会残留下来,是非器在下一轮的 body[0] 之后就读到陈旧的真值,循环永远
-        跑不完。
+        字段会残留下来,continue_when 谓词在下一轮的 body[0] 之后就读到陈旧的产出,
+        循环永远跑不完。
         """
         ctx.state.patch(f"_loop.{self.name}", {"last": outputs})
 

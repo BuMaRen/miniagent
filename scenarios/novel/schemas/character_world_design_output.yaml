@@ -1,9 +1,0 @@
-# "角色与世界观设计"阶段(stages.yaml 的 character_world_design)的 output_schema。
-# character/world_entry 借自 state_schema.yaml 的 types:(见 engine/scenario.py
-# 的 Scenario.from_package 装配 schemas/ 目录时借出这张具名类型表的说明)。
-name: character_world_design_output
-definition:
-  story_bible.meta:
-    title: str
-  story_bible.characters: [character]
-  story_bible.world: [world_entry]

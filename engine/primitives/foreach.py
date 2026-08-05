@@ -19,8 +19,8 @@ N-1 轮的产物)是 body 里各 Stage 对共享 StateStore 做 reads/writes 的
 怎么喂给 body"这个老问题,就此归位成一条普通的 reads/writes,而非塞进 inputs
 的魔法键。
 
-纯声明式:整个节点由 items_path / body / 两个游标路径描述,可从 YAML 直接拼出
-(见 Workflow.from_spec),不含任何运行期回调。
+整个节点由 items_path / body / 两个游标路径这几个纯数据字段描述,不含任何运行期
+回调,场景方在自己的 workflow.py 里直接 `ForEach(...)` 构造即可。
 
 body 里可以放一个 Breaker(见 engine/primitives/breaker.py):它触发时相当于
 Python 的 `break`——停止处理剩余 items,当前这一项按已处理计入游标,返回值里

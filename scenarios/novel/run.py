@@ -1,9 +1,9 @@
 """novel 场景的真实运行入口(docs/framework-design.md §8 步骤 5)。
 
-组装 LLMClient / StateStore / RunContext,跑通 workflow.yaml 定义的流程,
-最后把故事圣经"落地"成 Markdown/JSON 文件。需要设置 ANTHROPIC_API_KEY 或
-OPENAI_API_KEY 环境变量;没有 API Key 时,可以运行同目录下的
-offline_demo.py 用脚本化回复走一遍完整流水线,验证接线是否正确。
+组装 LLMClient / StateStore / RunContext,跑通 scenarios/novel/workflow.py 里
+build_workflow() 拼出的流程,最后把故事圣经"落地"成 Markdown/JSON 文件。需要
+设置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY 环境变量;没有 API Key 时,可以运行
+同目录下的 offline_demo.py 用脚本化回复走一遍完整流水线,验证接线是否正确。
 
 用法示例:
 
@@ -27,9 +27,10 @@ from llm.client import LLMClient
 from llm.logging_client import LoggingLLMClient
 from state.backends.json_file import JsonFileStateStore
 
-from scenarios.novel import SCENARIO
-from scenarios.novel.executors import NEEDS_REVISION_KEY
 from scenarios.novel.landing import land_output
+from scenarios.novel.nodes.common import NEEDS_REVISION_KEY
+from scenarios.novel.state_schema import empty_state
+from scenarios.novel.workflow import build_workflow
 
 DEFAULT_BRIEF_PATH = Path(__file__).with_name("brief.yaml")
 DEFAULT_OUTPUT_DIR = Path(__file__).with_name("output")
@@ -94,13 +95,13 @@ def build_llm_client(model: str | None = None, log_dir: Path | None = None) -> L
     """按 model(若给出)或环境变量选一个真实 Provider 并构造 client。
 
     Args:
-        model: 显式指定本次要用的模型名,通常来自 workflow.yaml 里某个节点标注
-            的 `model` 字段(见 engine.workflow.Workflow.resolve_stage_models)。
-            给出时由 _infer_provider 按模型名决定 Provider——不再看"哪个 API
-            Key 恰好存在",对应的 Key 缺失时直接报错,而不是把这个模型名发去
-            另一家的 SDK。为 None 时保留旧行为:优先 Anthropic,其次 OpenAI,
-            由环境变量里存在哪个 API Key 决定 Provider,模型名退回 NOVEL_MODEL
-            环境变量或该 Provider 的默认值。
+        model: 显式指定本次要用的模型名,通常来自 scenarios/novel/workflow.py
+            里某个节点显式钉住的 `_PINNED_MODEL`,或本函数自己退回的
+            NOVEL_MODEL 环境变量。给出时由 _infer_provider 按模型名决定
+            Provider——不再看"哪个 API Key 恰好存在",对应的 Key 缺失时直接
+            报错,而不是把这个模型名发去另一家的 SDK。为 None 时保留旧行为:
+            优先 Anthropic,其次 OpenAI,由环境变量里存在哪个 API Key 决定
+            Provider,模型名退回 NOVEL_MODEL 环境变量或该 Provider 的默认值。
         log_dir: 非 None 时,给构造出的 client 包一层 LoggingLLMClient,把每次
             chat() 的请求/响应落盘到该目录(见 --log-chats)。
     """
@@ -123,7 +124,7 @@ def build_llm_client(model: str | None = None, log_dir: Path | None = None) -> L
     api_key = os.environ.get(api_key_env)
     if not api_key:
         raise RuntimeError(
-            f"workflow.yaml 里要求使用模型 {model!r},这需要 {provider} 的 SDK,"
+            f"scenarios/novel/workflow.py 要求使用模型 {model!r},这需要 {provider} 的 SDK,"
             f"但当前环境未设置 {api_key_env}。"
         )
     resolved_model = model or os.environ.get("NOVEL_MODEL", _PROVIDER_DEFAULT_MODEL[provider])
@@ -164,10 +165,10 @@ def build_llm_client(model: str | None = None, log_dir: Path | None = None) -> L
 def make_client_factory(log_dir: Path | None = None):
     """按 model 分组、按需惰性构造并复用 LLMClient。
 
-    workflow.yaml 里没有被任何节点标注过 model 的 Stage,收到的 model 是
-    None,这些 Stage 共用同一个"默认 client"——与改动前"所有 Stage 共用一个
-    client"的行为完全一致。只有显式标注了不同 model 的节点才会各自拿到一个
-    新建的 client,不会为同一个 model 反复创建连接。
+    scenarios/novel/workflow.py 里没有显式钉住 model 的节点,收到的 model 是
+    None,这些节点共用同一个"默认 client"。只有 concept_expansion/
+    character_world_design 这两个显式钉住了模型的节点会各自拿到一个新建的
+    client,不会为同一个 model 反复创建连接。
 
     Args:
         log_dir: 透传给 build_llm_client,非 None 时每个新建的 client 都会被
@@ -286,12 +287,12 @@ def main() -> None:
 
     brief = load_brief(args.brief)
     log_dir = (args.output_dir / "log") if args.log_chats else None
-    workflow = SCENARIO.build_workflow(client_factory=make_client_factory(log_dir))
+    workflow = build_workflow(client_factory=make_client_factory(log_dir))
 
     state_path = args.state_file or (args.output_dir / DEFAULT_STATE_FILE)
     state_store = JsonFileStateStore(state_path)
     if not state_store.snapshot():
-        state_store.load(SCENARIO.empty_state())
+        state_store.load(empty_state())
 
     resume = _load_resume_point(state_path)
     if resume is not None:

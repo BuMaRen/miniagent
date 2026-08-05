@@ -3,8 +3,8 @@
 run.py 需要 ANTHROPIC_API_KEY/OPENAI_API_KEY 才能工作,但"这套接线到底通不通"
 应该不依赖网络和账单。这里给每个需要 LLM 的 Stage 配一个
 ScriptedLLMClient(与 tests/agent/test_agent.py 用的手法一致):预先写好这一次
-要"生成"的内容,严格按各 Stage 在 executors.py / stages.yaml 里约定的 JSON 契约打包成响应。
-Critic 类 Stage 统一脚本成 {"needs_revision": false},所以每个 Loop 的 body
+要"生成"的内容,严格按各节点在 scenarios/novel/nodes/ 里约定的 JSON 契约打包成
+响应。Critic 类 Stage 统一脚本成 {"needs_revision": false},所以每个 Loop 的 body
 一轮就跑完、不会重开第二轮——这是为了让"跑通全流程"这件事在没有真实模型判断力
 的情况下依然确定性可复现,不代表真实运行时 Loop 不会修订。
 
@@ -32,9 +32,10 @@ from llm.client import ChatResponse, LLMClient
 from llm.message import Message
 from state.backends.memory import InMemoryStateStore
 
-from scenarios.novel import SCENARIO
-from scenarios.novel.executors import NEEDS_REVISION_KEY
 from scenarios.novel.landing import land_output
+from scenarios.novel.nodes.common import NEEDS_REVISION_KEY
+from scenarios.novel.state_schema import empty_state
+from scenarios.novel.workflow import build_workflow
 
 DEFAULT_BRIEF_PATH = Path(__file__).with_name("brief.yaml")
 DEFAULT_OUTPUT_DIR = Path(__file__).with_name("output")
@@ -291,13 +292,12 @@ def build_scripted_client_factory():
     }
 
     def factory(stage_name: str, _model: str | None) -> LLMClient:
-        # build_node_registry 会为 workflow.yaml 里提到的每个 Stage 名字都建一个
-        # Agent。没预置回复的 Stage 给一个空列表:只要它真的不被调用就没事,一旦
-        # 被调用会因为"用完了"而报错,提醒开发者补一条脚本回复,而不是默默返回
-        # 不相关的内容。每个 Stage 也只预置一条回复,所以"Loop 意外重开了一轮"
-        # 这种接线错误同样会当场炸出来。_model(见
-        # engine.workflow.Workflow.resolve_stage_models)在离线演示里没有意义
-        # ——脚本化回复不真的调用任何模型,忽略即可。
+        # build_workflow 会为流程里每个需要 LLM 的节点都建一个 Agent。没预置
+        # 回复的 Stage 给一个空列表:只要它真的不被调用就没事,一旦被调用会因为
+        # "用完了"而报错,提醒开发者补一条脚本回复,而不是默默返回不相关的内容。
+        # 每个 Stage 也只预置一条回复,所以"Loop 意外重开了一轮"这种接线错误
+        # 同样会当场炸出来。_model 在离线演示里没有意义——脚本化回复不真的调用
+        # 任何模型,忽略即可。
         response = responses.get(stage_name)
         return ScriptedLLMClient([response] if response is not None else [])
 
@@ -308,7 +308,8 @@ def _auto_checkpoint_handler(request: CheckpointRequest) -> dict[str, Any]:
     print(f"[checkpoint:auto] {request.name} -> 自动通过(离线演示不做交互式确认)")
     if request.name in ("confirm_outline", "chapter_pause"):
         # confirm_outline / chapter_pause 是各自 Loop body 的最后一关,契约是
-        # {"needs_revision", "feedback"}(见 executors.py 的 human review checkpoint)。
+        # {"needs_revision", "feedback"}(见 scenarios/novel/nodes/chapter.py 的
+        # human review checkpoint)。
         return {NEEDS_REVISION_KEY: False, "feedback": ""}
     return request.context or {}
 
@@ -318,8 +319,8 @@ def run_offline_demo(output_dir: Path = DEFAULT_OUTPUT_DIR) -> dict[str, Path]:
     with open(DEFAULT_BRIEF_PATH, "r", encoding="utf-8") as f:
         brief = yaml.safe_load(f)
 
-    workflow = SCENARIO.build_workflow(client_factory=build_scripted_client_factory())
-    state_store = InMemoryStateStore(initial=SCENARIO.empty_state())
+    workflow = build_workflow(client_factory=build_scripted_client_factory())
+    state_store = InMemoryStateStore(initial=empty_state())
     ctx = RunContext(
         state=state_store,
         checkpoint_handler=_auto_checkpoint_handler,

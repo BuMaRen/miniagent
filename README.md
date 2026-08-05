@@ -16,27 +16,24 @@
 ```
 miniagent/
 ├── engine/                     # 工作流引擎(框架核心,场景无关)
-│   ├── stage.py                #   Stage:输入→输出契约 + Node 统一协议 + ExecutorRegistry
+│   ├── stage.py                #   Stage:输入→输出契约 + Node 统一协议
 │   ├── context.py              #   RunContext:运行期共享上下文 + 生命周期 hook
-│   ├── workflow.py             #   Workflow:节点编排 + from_spec(流程结构的声明式解析)
-│   ├── spec.py                 #   把 stages.yaml 编译成 Node(节点本身的声明式解析)
+│   ├── workflow.py             #   Workflow:顶层节点编排 + 失败续跑(WorkflowFailure)
 │   └── primitives/             #   四个控制流原语
 │       ├── sequence.py         #     顺序执行
 │       ├── loop.py             #     迭代:同一份输入反复跑 body 直到判定放行(含超限策略)
 │       ├── foreach.py          #     遍历子流程
-│       └── checkpoint.py       #     人工断点(支持异步挂起/恢复)
+│       ├── checkpoint.py       #     人工断点(同步问答)
+│       └── breaker.py          #     提前终止 Loop/ForEach
 │
 ├── agent/                      # 能力挂载层
 │   ├── agent.py                #   Agent = LLM + 工具 + 工具集 + 记忆(agentic loop)
-│   ├── toolset.py              #   ToolSet:一组 (func, schema) + ToolSetRegistry
+│   ├── toolset.py              #   ToolSet:一组 (func, schema)
 │   └── memory.py               #   对话记忆(短期,区别于 State Store)
-│
-├── prompts/                    # 提示词注册表
-│   └── registry.py             #   PromptRegistry:*.prompt 整目录登记 + "@名字" 引用展开
 │
 ├── state/                      # 共享状态
 │   ├── store.py                #   StateStore 抽象:get/patch/append/slice/snapshot
-│   ├── schema.py               #   StateSchema:场景方定义字段与校验 + SchemaRegistry
+│   ├── schema.py               #   StateSchema:场景方定义字段与校验
 │   └── backends/               #   内存后端 + JSON 文件后端(断点恢复)
 │
 ├── llm/                        # LLM 抽象层
@@ -52,11 +49,12 @@ miniagent/
 └── scenarios/                  # 场景层:二次开发挂载点(见 scenarios/README.md)
 ```
 
-> 框架层(`engine`/`agent`/`state`/`llm`/`tools`)已完成实现;`scenarios/` 下的具体场景(如小说生成)尚待落地。
+场景方直接用 Python 组合 `Stage` 与 `engine/primitives/` 下的四个控制流原语拼出
+`Workflow`(见 `scenarios/short/workflow.py`、`scenarios/novel/workflow.py`),
+不存在从 YAML 等声明式定义编译节点这一层——详见 [docs/framework-design.md](docs/framework-design.md) §7 与 [scenarios/development-guide.md](scenarios/development-guide.md)。
 
 ## 关键设计点
 
-0. **两份声明式定义** — `stages.yaml` 说"每个节点是什么"(谁执行、读写哪些状态、输出契约、挂哪些 ToolSet、用哪段提示词),`workflow.yaml` 说"节点怎么串"。两份都由框架解析(`engine/spec.py` + `engine/workflow.py`),场景侧的 Python 只剩纯函数 executor、ToolSet 与声明式表达不了的那点副作用。详见 [docs/framework-design.md](docs/framework-design.md) §7。
 1. **Node 统一协议** — Stage 和四个控制流原语都实现 `run(ctx, inputs)`,因此能任意嵌套(`ForEach` 的 body 可以是 `Loop`)。这是"用少量原语组合出任意流程"的基础。
 2. **reads/writes 声明式** — Stage 显式声明需要读写的状态切片,既能只向 LLM 注入相关上下文(控制成本),又能做依赖分析(判断哪些 Stage 可并行)。
 3. **Loop 的退出与超限策略** — "什么叫合格"由 `continue_when` 指向的那条状态路径决定,引擎只读它的真假、不认识任何业务字段名;超限有 `accept_last / escalate_to_checkpoint / raise` 三种策略,杜绝死循环。
@@ -89,20 +87,21 @@ docker run -p 8000:8000 -v $(pwd)/site/runs:/app/site/runs miniagent-short
 
 ## 二次开发一个新场景
 
-参见 [docs/framework-design.md](docs/framework-design.md) §8 与 [scenarios/README.md](scenarios/README.md)。典型步骤:
+参见 [docs/framework-design.md](docs/framework-design.md) §8 与 [scenarios/development-guide.md](scenarios/development-guide.md)。典型步骤:
 
-1. 定义 `state_schema.yaml`(该场景要跨步骤追踪哪些事实)与各 Stage 的 `schemas/*.yaml`(输出契约)。
+1. 定义 `state_schema.py`(该场景要跨步骤追踪哪些事实,用 `state.schema.StateSchema` 直接构造)。
 2. 开发 `toolsets/`(每个 Stage 需要的工具集,**主要工作量所在**)。
-3. 写 `prompts/*.prompt`(每个 Agent 的提示词;共享片段用 `@名字` 引用一次即可)。
-4. 在 `stages.yaml` 里声明每个节点:executor / reads / writes / output_schema / tools / prompt。
-5. 在 `workflow.yaml` 里用 Sequence/Loop/ForEach/Checkpoint 拼出流程。
+3. 写 `prompts.py`(每个 Agent 的提示词;共享片段提成模块级常量复用)。
+4. 在 `nodes/` 下按业务分组,每个模块提供 `build_xxx_stage()` 函数:声明节点的 executor / reads / writes / output_schema / tools / prompt。
+5. 在 `workflow.py` 的 `build_workflow()` 里用 `Sequence`/`Loop`/`ForEach`/`Checkpoint` 直接拼出流程。
 6. 在 `run.py` 里组装 LLMClient / StateStore / RunContext 并运行。
 
-`stages.py` 只剩纯函数 executor(用 `@executor` 装饰器登记)与声明式表达不了的节点包装。
+参见 `scenarios/short/`、`scenarios/novel/` 两个完整范例。
 
 ## 文档
 
 - [docs/framework-design.md](docs/framework-design.md) — **通用工作流框架设计**:核心原语定义、二次开发指南(先读这份)
+- [scenarios/development-guide.md](scenarios/development-guide.md) — **场景开发指南**:动手向导,一步步把框架构件拼成一个新场景
 - [docs/workflow-design.md](docs/workflow-design.md) — 小说生成工作流:框架原语在该场景下的具体实例化
 - [docs/story-bible-schema.md](docs/story-bible-schema.md) — 故事圣经:State Store 在该场景下的具体 Schema
 

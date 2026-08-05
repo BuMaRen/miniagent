@@ -62,3 +62,26 @@
     - Node2 根据评审反馈的结果修改测试用例，提交复审
 2. 需求方评审使用 1 个 Node
 3. 判断结束使用一个 no-agent 的 Node
+
+#### 测试节点1
+
+读取需求文档，输出第一版用例，只存储 drafted 状态的。
+
+#### 测试节点2
+
+修改审核过后的测试用例，只做修改不补充，只访问 drafted
+
+#### 开发节点
+
+skip
+
+#### 需求
+
+可以访问 drafted、reviewed、deprecated
+可以补充可能遗漏的测试用例
+
+### 状态设计
+
+需要跨节点追踪的状态：
+- drafted、reviewed、deprecated 状态的 testcase
+- 或许还需要检查标志位看看是否需要 break

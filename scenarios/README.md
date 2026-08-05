@@ -13,6 +13,16 @@
 `short/` 是"内容与流程分离"的参考实现:用户 prompt(写什么)与流程 prompt(怎么写)
 分处两个文件、只经 State 相接,细节见 [scenarios/short/README.md](short/README.md)。
 
+两个场景都用同一种组装方式:场景包里直接用 Python 拼出 `Workflow`(`workflow.py`
+的 `build_workflow()`),节点定义按业务分组放在 `nodes/`(各模块提供
+`build_xxx_stage()`)。没有 YAML 声明式配置这一层——想知道每个节点具体读写什么
+状态、挂了什么 ToolSet,直接看对应的 Python 源码即可。二次开发一个新场景的完整
+步骤见 [scenarios/development-guide.md](development-guide.md)。
+
+在动手写一个真实场景之前,如果想先不挂 LLM、单独把"数据怎么声明"与"四个控制流
+原语(尤其是 `Loop` 的 continue 与 `Breaker` 的 break)怎么用"跑一遍看明白,见
+[`examples/`](examples/)——不是场景,是一份能直接 `python -m` 跑起来的原语速查手册。
+
 ## 示例场景一:小说生成
 
 **根据用户给定的题材,自动生成一篇中短篇小说**——这是目前用来验证框架抽象是否好用的第一个具体场景。要让它"更专业地生产小说",预期的改动方式是打磨/扩充对应 Stage 上挂载的 ToolSet(如章节撰写、一致性评审),而不是改动引擎结构。
@@ -53,23 +63,23 @@ flowchart TD
 
 | 文件/模块 | 职责 | 对应框架构件 |
 |---|---|---|
-| `state_schema.yaml` | 定义该场景的共享状态结构 | `state.StateSchema`(小说见 [docs/story-bible-schema.md](../docs/story-bible-schema.md)) |
-| `schemas/*.yaml` | 各 Stage 的输出契约(可借用 state_schema 里的具名类型) | `state.StateSchema` |
+| `state_schema.py` | 定义该场景的共享状态结构 | `state.StateSchema`(小说见 [docs/story-bible-schema.md](../docs/story-bible-schema.md)) |
 | `toolsets/` | 每个 Stage 需要的工具集(**主要开发工作量**) | `agent.ToolSet` |
-| `prompts/*.prompt` | 每个 Agent 的提示词;共享片段用 `@名字` 引用 | `prompts.PromptRegistry` |
-| `stages.yaml` | 声明每个节点:executor / reads / writes / schema / tools / prompt | `engine.spec.build_node_registry` |
-| `workflow.yaml` | 用 Sequence/Loop/ForEach/Checkpoint 拼出流程 | `engine.Workflow.from_spec` + `engine.primitives` |
-| `stages.py` | 只剩纯函数 executor(`@executor` 登记)与声明式表达不了的节点包装 | `engine.stage.ExecutorRegistry` |
+| `prompts.py` | 每个 Agent 的提示词;共享片段提成模块级常量复用 | —— |
+| `nodes/` | 按业务分组,每个模块提供 `build_xxx_stage()`:executor / reads / writes / schema / tools / prompt | `engine.stage.Stage` |
+| `workflow.py` | `build_workflow()` 用 Sequence/Loop/ForEach/Checkpoint 直接拼出流程 | `engine.Workflow` + `engine.primitives` |
 | `run.py` | 组装 LLMClient / StateStore / RunContext 并运行 | 入口 |
+
+完整的动手向导(含每一步的代码示例)见 [scenarios/development-guide.md](development-guide.md)。
 
 ## 从框架到场景的映射(以小说为例)
 
-- 流程结构见 [docs/workflow-design.md](../docs/workflow-design.md) §4 的 Workflow 定义。
+- 流程结构见 [docs/workflow-design.md](../docs/workflow-design.md) §4 的 Workflow 定义,落地在 [scenarios/novel/workflow.py](novel/workflow.py)。
 - 大纲评审、章节审校 = 同一个 `Loop` 原语的两次实例化。
-- 逐章撰写 = `ForEach(chapters, body=Loop(body=[draft, critic, human_gate]))`。
-- 故事圣经 = `StateSchema` 的一个实例。
+- 逐章撰写 = `ForEach(chapters, body=Sequence([draft_and_review_loop, finalize]))`。
+- 故事圣经 = `StateSchema` 的一个实例(见 [scenarios/novel/state_schema.py](novel/state_schema.py))。
 
 ## 关键点
 
-**专业化一个场景 = 打磨 `toolsets/` 与 `prompts/` + 调整 `state_schema.yaml`,而不是改动框架层。**
+**专业化一个场景 = 打磨 `toolsets/` 与 `prompts.py` + 调整 `state_schema.py`,而不是改动框架层。**
 新增场景时,复制这套目录约定,替换成你自己的 State Schema 与 ToolSet 即可。

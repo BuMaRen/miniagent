@@ -13,6 +13,15 @@ def _ctx(**kwargs):
     return RunContext(**kwargs)
 
 
+def _needs_revision(ctx, outputs):
+    return outputs.get("needs_revision", False)
+
+
+def _never_continue(ctx, outputs):
+    """占位判定谓词:这些测试关心的是 Breaker,不关心 continue_when 本身,恒为假。"""
+    return False
+
+
 class BreakerStandaloneTests(unittest.TestCase):
     def test_passthrough_when_predicate_is_false(self):
         breaker = Breaker(name="stop", predicate=lambda ctx, inputs: False)
@@ -51,7 +60,7 @@ class BreakerInLoopTests(unittest.TestCase):
         loop = Loop(
             name="loop",
             body=[breaker, critic],
-            continue_when="_loop.loop.last.needs_revision",
+            continue_when=_needs_revision,
             max_iterations=5,
         )
         ctx = _ctx()
@@ -70,7 +79,7 @@ class BreakerInLoopTests(unittest.TestCase):
             after_loop_iteration=lambda name, i, passed: calls.append((name, i, passed))
         )
         breaker = Breaker(name="stop", predicate=lambda ctx, inputs: True)
-        loop = Loop(name="loop", body=[breaker], continue_when="never")
+        loop = Loop(name="loop", body=[breaker], continue_when=_never_continue)
 
         loop.run(_ctx(hooks=hooks), {})
 
@@ -90,7 +99,7 @@ class BreakerInLoopTests(unittest.TestCase):
         loop = Loop(
             name="loop",
             body=[breaker, critic],
-            continue_when="_loop.loop.last.needs_revision",
+            continue_when=_needs_revision,
             max_iterations=10,
         )
 
@@ -157,7 +166,7 @@ class BreakerNestingTests(unittest.TestCase):
 
         breaker = Breaker(name="inner_stop", predicate=lambda ctx, inputs: True)
         inner_loop = Loop(
-            name="inner_loop", body=[_InnerProducer(), breaker], continue_when="never"
+            name="inner_loop", body=[_InnerProducer(), breaker], continue_when=_never_continue
         )
         state = InMemoryStateStore(initial={"chapters": ["a", "b", "c"]})
         fe = ForEach(name="fe", items_path="chapters", body=inner_loop)

@@ -33,8 +33,8 @@ ClientFactory = Callable[[str, str | None], LLMClient]
 
 _DEFAULT_MAX_STEPS = 6
 
-# 评审类节点的判定字段名。极性朝着"还要再改一轮"为真——Loop 的 continue_when 是
-# 一条裸状态路径,引擎只取真假,没有取反的余地(见 engine/primitives/loop.py)。
+# 评审类节点的判定字段名。极性朝着"还要再改一轮"为真——outline_loop/
+# section_review_loop 的 continue_when 都是 needs_revision_continue_when。
 NEEDS_REVISION_KEY = "needs_revision"
 
 # 状态路径(手写常量;场景内手写状态路径字符串常量与 schema 定义两处维护的问题
@@ -46,6 +46,16 @@ PAYOFFS_PATH = "short_story.payoffs"
 SECTIONS_PATH = "short_story.sections"
 
 CRITIC_OUTPUT_SCHEMA = StateSchema("critic_output", {NEEDS_REVISION_KEY: bool, "feedback": str})
+
+
+def needs_revision_continue_when(ctx: RunContext, outputs: dict[str, Any]) -> bool:
+    """本场景两个 Loop(outline_loop / section_review_loop)共用的判定谓词。
+
+    Loop 在 body 里每个节点跑完后都会调用一次这个谓词(不只是评审节点那一个),
+    所以用 .get(..., False) 而不是 outputs[...]——生成/精修类节点的 outputs 里
+    没有这个字段,.get 的默认值 False 让它不会被误判成"要求重开一轮"。
+    """
+    return outputs.get(NEEDS_REVISION_KEY, False)
 
 
 def make_agent(

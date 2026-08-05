@@ -1,7 +1,7 @@
 """short 场景的运行入口。
 
-组装 LLMClient / StateStore / RunContext,跑通 workflow.yaml 定义的流程,最后把
-成品落地成 Markdown/JSON。全程无人工断点,启动后不需要有人守着。
+组装 LLMClient / StateStore / RunContext,跑通 workflow.py 的 build_workflow()
+拼出的流程,最后把成品落地成 Markdown/JSON。全程无人工断点,启动后不需要有人守着。
 
 用法:
 
@@ -154,8 +154,9 @@ def build_llm_client(model: str | None = None, log_dir: Path | None = None) -> L
 def make_client_factory(model: str | None = None, log_dir: Path | None = None):
     """按 model 分组、按需惰性构造并复用 LLMClient。
 
-    workflow.yaml 里没有任何节点标注 model,所以正常情况下所有节点共用同一个
-    client;要给某个节点换模型,在 workflow.yaml 里标注 model 即可,这里不用动。
+    workflow.py 里没有任何节点显式指定 model,所以正常情况下所有节点共用同一个
+    client;要给某个节点换模型,在 workflow.py 对应的 client_for(...) 调用里传
+    model 即可,这里不用动。
     """
     clients: dict[str | None, LLMClient] = {}
 

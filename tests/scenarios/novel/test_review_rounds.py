@@ -1,4 +1,4 @@
-"""按真实的 workflow.yaml 走一遍"评审不通过 -> 重开一轮"的路径。
+"""按真实的 scenarios/novel/workflow.py 走一遍"评审不通过 -> 重开一轮"的路径。
 
 offline_demo 里所有 critic 都一次通过,所以它验证不到 Loop 真正重开一轮时的接线;
 而这恰恰是最容易接错的地方:
@@ -6,11 +6,11 @@ offline_demo 里所有 critic 都一次通过,所以它验证不到 Loop 真正�
   · 短路:AI critic 判否时,body 里排在它后面的人工确认(confirm_outline /
     chapter_pause)不该被执行 —— 不必拿一份 AI 都没过的草稿去打扰人;
   · 反馈跨轮:下一轮的生成节点必须能读到驳回它的那条 feedback,靠的是引擎发布的
-    游标 _loop.<name>.last(见 executors.OUTLINE_LOOP_LAST_PATH),而不是 Loop 把
-    feedback 塞进 inputs;
+    游标 _loop.<name>.last(见 nodes.outline.OUTLINE_LOOP_LAST_PATH),而不是 Loop
+    把 feedback 塞进 inputs;
   · 人工与 AI 平权:人工填的 needs_revision 与 AI 的一样能驱动下一轮。
 
-这里不 mock 引擎:用真实的 workflow.yaml、真实的 Loop/ForEach/Checkpoint,只把
+这里不 mock 引擎:用真实的 build_workflow()、真实的 Loop/ForEach/Checkpoint,只把
 LLM 换成按 Stage 名预置多条回复的脚本客户端。
 """
 
@@ -21,8 +21,10 @@ from typing import Any
 from engine.context import CheckpointRequest, RunContext
 from llm.client import ChatResponse, LLMClient
 from llm.message import Message
-from scenarios.novel import SCENARIO
-from scenarios.novel.executors import NEEDS_REVISION_KEY, OUTLINE_LOOP_LAST_PATH
+from scenarios.novel.nodes.common import NEEDS_REVISION_KEY
+from scenarios.novel.nodes.outline import OUTLINE_LOOP_LAST_PATH
+from scenarios.novel.state_schema import empty_state
+from scenarios.novel.workflow import build_workflow
 from state.backends.memory import InMemoryStateStore
 
 
@@ -120,8 +122,8 @@ class OutlineLoopRestartTests(unittest.TestCase):
         return handler
 
     def _run(self, human_answers):
-        workflow = SCENARIO.build_workflow(client_factory=self._factory)
-        state = InMemoryStateStore(initial=SCENARIO.empty_state())
+        workflow = build_workflow(client_factory=self._factory)
+        state = InMemoryStateStore(initial=empty_state())
         ctx = RunContext(state=state, checkpoint_handler=self._handler(human_answers))
         outputs = workflow.run(ctx, {"topic": "测试题材"})
         return state, outputs

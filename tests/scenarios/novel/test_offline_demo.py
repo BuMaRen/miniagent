@@ -1,6 +1,6 @@
 """端到端验证 scenarios/novel 的完整接线(不需要真实 API Key)。
 
-跑一遍 offline_demo.run_offline_demo,断言它真的驱动了 workflow.yaml 里
+跑一遍 offline_demo.run_offline_demo,断言它真的驱动了 workflow.py 里拼出的
 sequence -> loop -> checkpoint -> foreach(loop) -> sequence 这一整条链路,
 并把结果落地成磁盘产物;顺带把第一章正文的内容钉住,防止后续改动
 (比如误改了 ScriptedLLMClient 的响应顺序)悄悄丢掉这一版已经写完的正文。

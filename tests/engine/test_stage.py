@@ -1,21 +1,9 @@
 import unittest
 
 from engine.context import LifecycleHooks, RunContext
-from engine.stage import (
-    ExecutorRegistry,
-    NodeWrapperRegistry,
-    Stage,
-    default_registry,
-    default_wrapper_registry,
-    executor,
-    node_wrapper,
-)
+from engine.stage import Stage
 from state.backends.memory import InMemoryStateStore
 from state.schema import SchemaError, StateSchema
-
-
-def _dummy_executor(ctx, inputs):
-    return inputs
 
 
 class StageRunTests(unittest.TestCase):
@@ -88,103 +76,6 @@ class StageRunTests(unittest.TestCase):
         outputs = stage.run(self.ctx, {"a": 1})
         self.assertEqual(self.state.snapshot(), before)
         self.assertEqual(outputs, {"echo": {"a": 1}})
-
-
-class ExecutorRegistryTests(unittest.TestCase):
-    def setUp(self):
-        self.registry = ExecutorRegistry()
-
-    def test_register_returns_true_on_success(self):
-        self.assertTrue(self.registry.register("_dummy_executor", _dummy_executor))
-        self.assertIs(self.registry.get("_dummy_executor"), _dummy_executor)
-
-    def test_register_duplicate_returns_false(self):
-        self.registry.register("_dummy_executor", _dummy_executor)
-        self.assertFalse(self.registry.register("_dummy_executor", _dummy_executor))
-
-    def test_get_missing_raises_keyerror(self):
-        with self.assertRaises(KeyError):
-            self.registry.get("nope")
-
-    def test_unregister_removes_executor(self):
-        self.registry.register("_dummy_executor", _dummy_executor)
-        self.registry.unregister("_dummy_executor")
-        with self.assertRaises(KeyError):
-            self.registry.get("_dummy_executor")
-
-    def test_unregister_missing_is_noop(self):
-        self.registry.unregister("never_registered")  # should not raise
-
-
-class ExecutorDecoratorTests(unittest.TestCase):
-    def tearDown(self):
-        default_registry.unregister("_decorated_dummy")
-
-    def test_executor_decorator_registers_to_default_registry(self):
-        @executor
-        def _decorated_dummy(ctx, inputs):
-            return inputs
-
-        self.assertIs(default_registry.get("_decorated_dummy"), _decorated_dummy)
-
-
-class _FakeNode:
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    def run(self, ctx, inputs):
-        return inputs
-
-
-class NodeWrapperRegistryTests(unittest.TestCase):
-    def setUp(self):
-        self.registry = NodeWrapperRegistry()
-
-    def test_register_returns_true_on_success(self):
-        wrapper = lambda node: node
-        self.assertTrue(self.registry.register("_dummy_wrapper", wrapper))
-        self.assertIs(self.registry.get("_dummy_wrapper"), wrapper)
-
-    def test_register_duplicate_returns_false(self):
-        self.registry.register("_dummy_wrapper", lambda node: node)
-        self.assertFalse(self.registry.register("_dummy_wrapper", lambda node: node))
-
-    def test_get_missing_raises_keyerror(self):
-        with self.assertRaises(KeyError):
-            self.registry.get("nope")
-
-    def test_unregister_removes_wrapper(self):
-        self.registry.register("_dummy_wrapper", lambda node: node)
-        self.registry.unregister("_dummy_wrapper")
-        with self.assertRaises(KeyError):
-            self.registry.get("_dummy_wrapper")
-
-    def test_unregister_missing_is_noop(self):
-        self.registry.unregister("never_registered")  # should not raise
-
-
-class NodeWrapperDecoratorTests(unittest.TestCase):
-    def tearDown(self):
-        default_wrapper_registry.unregister("_decorated_dummy_wrapper")
-
-    def test_node_wrapper_decorator_registers_to_default_registry(self):
-        @node_wrapper
-        def _decorated_dummy_wrapper(node):
-            return node
-
-        self.assertIs(
-            default_wrapper_registry.get("_decorated_dummy_wrapper"), _decorated_dummy_wrapper
-        )
-
-    def test_wrapper_can_swap_in_a_different_node(self):
-        inner = _FakeNode("inner")
-
-        @node_wrapper
-        def _decorated_dummy_wrapper(node):
-            return _FakeNode(f"wrapped_{node.name}")
-
-        wrapped = default_wrapper_registry.get("_decorated_dummy_wrapper")(inner)
-        self.assertEqual(wrapped.name, "wrapped_inner")
 
 
 if __name__ == "__main__":

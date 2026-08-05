@@ -1,5 +1,0 @@
-name: reviewcase_output
-definition:
-  tc_center.test_cases.drafted_test_cases: [test_case]
-  tc_center.test_cases.reviewed_test_cases: [test_case]
-  tc_center.test_cases.deprecated_test_cases: [test_case]

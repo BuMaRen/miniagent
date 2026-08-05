@@ -23,7 +23,7 @@
 作者激励公告中反复验证过、稳定有阅读吸引力的方向,不是凭空拍的,但也只是起点——
 选定方向后仍要落到具体独特的人物与冲突。
 
-对照组是 `scenarios/novel`:那份场景把"西汉、张骞"焊死在了 `stages._STYLE_GUIDE` 里,
+对照组是 `scenarios/novel`:那份场景把"西汉、张骞"焊死在了 `prompts.STYLE_GUIDE` 里,
 只服务一个题材。
 
 ## 用法
@@ -95,7 +95,7 @@ AI 腔。分工是:
    - 本节字数与预算的偏差、全篇总字数
    - 大纲的编号连续性、字数预算合计、爽点"先埋后放"的先后关系
 
-   大纲层与正文层算出的问题都**一票否决**(`stages._merge_verdict`),模型说通过也没用。
+   大纲层与正文层算出的问题都**一票否决**(`nodes.common.merge_verdict`),模型说通过也没用。
    正文层多一条硬要求:字数**下限**不达标必须改(`toolsets.structure.section_length_problem`
    对下限的容差比上限更紧,见该函数说明)——写多了能删,写少了是硬伤。阈值集中在
    `style.DEFAULT_THRESHOLDS`,要松紧只改那一处。
@@ -113,7 +113,7 @@ AI 腔。分工是:
 - **模型只产出它真正创作的那部分**:撰写节点只返回本节 `text`/`summary`,整份 sections
   数组由 executor 拼好再交给声明式 `writes` 写回。novel 那边要求模型原样回显整个数组,
   代价不只是 token —— 让模型抄一遍前面几章的正文,本身就是丢字、改字、串味的主要来源。
-- **每次调用都清空对话记忆**(`stages._ask`):同一个 Agent 实例会被每一节复用,
+- **每次调用都清空对话记忆**(`nodes.common.ask`):同一个 Agent 实例会被每一节复用,
   不清空的话模型会顺着自己上一节的句式继续写,那正是要防的 AI 痕迹。跨节连贯性走
   State(前情摘要 + 上一节结尾原文),不靠对话历史。
 - **不写"只输出 JSON"这类叮嘱**:每个 LLM 节点都带 `output_schema` 走 Provider 的结构化
@@ -128,6 +128,6 @@ AI 腔。分工是:
 | `state_schema.py` | 共享状态:`brief`(用户填) + `meta`/`characters`/`payoffs`/`sections`(流程产出) |
 | `toolsets/style.py` | 文风体检 + 挂给精修/审校 Agent 的 ToolSet |
 | `toolsets/structure.py` | 大纲结构体检(纯确定性,不挂成工具) |
-| `stages.py` | 把 prompt/ToolSet 挂到 Agent 上,组装成各节点 |
-| `workflow.yaml` / `workflow.py` | 流程结构 |
+| `nodes/` | 按业务分组,每个模块的 `build_xxx_stage()` 把 prompt/ToolSet 挂到 Agent 上,组装成各节点 |
+| `workflow.py` | 流程结构:`build_workflow()` 用 Sequence/Loop/ForEach 拼出节点树 |
 | `landing.py` / `run.py` | 产物落地 / 运行入口 |

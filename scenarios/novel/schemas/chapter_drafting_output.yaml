@@ -1,7 +1,0 @@
-# "逐章撰写"阶段(stages.yaml 的 chapter_drafting)的 output_schema。
-# chapter 借自 state_schema.yaml 的 types:。
-name: chapter_drafting_output
-definition:
-  story_bible.chapters: [chapter]
-  chapter_index: int
-  chapter_text: str

@@ -1,9 +1,0 @@
-# "大纲与节拍生成"阶段(stages.yaml 的 outline_generation)的 output_schema。
-# chapter/foreshadowing 借自 state_schema.yaml 的 types:。
-name: outline_generation_output
-definition:
-  story_bible.chapters: [chapter]
-  story_bible.foreshadowing: [foreshadowing]
-  story_bible.meta:
-    title: str
-    logline: str

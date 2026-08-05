@@ -1,9 +1,8 @@
 """在 Python 里直接拼出 short_story_generation 的 Workflow(外层组装)。
 
-不再经过 workflow.yaml/Workflow.from_spec 这层声明式解析:每个 Node 是什么由
-scenarios/short/nodes/ 下按业务分组的模块各自负责("这个 Node 是什么"),这里只
-负责"这些 Node 怎么串"("外层做组装")——用 Sequence/Loop/ForEach 直接把
-build_xxx_stage() 返回的 Stage 对象拼成一棵树,和下面的结构一一对应:
+每个 Node 是什么由 scenarios/short/nodes/ 下按业务分组的模块各自负责("这个 Node
+是什么"),这里只负责"这些 Node 怎么串"("外层做组装")——用 Sequence/Loop/ForEach
+直接把 build_xxx_stage() 返回的 Stage 对象拼成一棵树,和下面的结构一一对应:
 
     setup(Sequence): input_parsing -> story_design
     outline_loop(Loop, max=2): outline_generation -> outline_critic
@@ -29,18 +28,16 @@ from engine.primitives.sequence import Sequence
 from engine.workflow import Workflow
 from llm.client import LLMClient
 
-from scenarios.short.nodes.common import ClientFactory, NEEDS_REVISION_KEY, SECTIONS_PATH
+from scenarios.short.nodes.common import ClientFactory, SECTIONS_PATH, needs_revision_continue_when
 from scenarios.short.nodes.final_qa import build_final_qa_stage
 from scenarios.short.nodes.input_parsing import build_input_parsing_stage
 from scenarios.short.nodes.outline import (
-    OUTLINE_LOOP_LAST_PATH,
     OUTLINE_LOOP_NAME,
     build_outline_critic_stage,
     build_outline_generation_stage,
 )
 from scenarios.short.nodes.section import (
     SECTION_LOOP_NAME,
-    SECTION_REVIEW_LOOP_LAST_PATH,
     SECTION_REVIEW_LOOP_NAME,
     build_section_critic_stage,
     build_section_drafting_stage,
@@ -76,7 +73,7 @@ def build_workflow(client_factory: ClientFactory) -> Workflow:
         # 在这里定死,后面不再有全局性的返工机会。
         Loop(
             name=OUTLINE_LOOP_NAME,
-            continue_when=f"{OUTLINE_LOOP_LAST_PATH}.{NEEDS_REVISION_KEY}",
+            continue_when=needs_revision_continue_when,
             max_iterations=2,
             body=[
                 build_outline_generation_stage(client_for("outline_generation")),
@@ -105,7 +102,7 @@ def build_workflow(client_factory: ClientFactory) -> Workflow:
                     build_section_drafting_stage(client_for("section_drafting")),
                     Loop(
                         name=SECTION_REVIEW_LOOP_NAME,
-                        continue_when=f"{SECTION_REVIEW_LOOP_LAST_PATH}.{NEEDS_REVISION_KEY}",
+                        continue_when=needs_revision_continue_when,
                         max_iterations=2,
                         body=[
                             build_section_polish_stage(client_for("section_polish")),
