@@ -1,4 +1,4 @@
-"""ForEach —— 数据驱动的重复执行原语(docs/framework-design.md §6.3)。
+"""ForEach —— 数据驱动的重复执行原语。
 
 把经典 for-each 循环搬到编排层::
 

@@ -1,4 +1,4 @@
-"""Loop —— 迭代原语(docs/framework-design.md §6.2)。
+"""Loop —— 迭代原语。
 
 **同一份输入，反复尝试到满意为止。** 和 ForEach 的关系是:ForEach 遍历 N 个不同
 的元素、由数据耗尽决定停;Loop 反复处理同一份数据、由 body 里的 Continuer/

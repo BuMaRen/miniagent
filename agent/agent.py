@@ -1,4 +1,4 @@
-"""Agent —— Stage 的典型执行体(docs/framework-design.md §4)。
+"""Agent —— Stage 的典型执行体。
 
 Agent 把 LLM、工具、工具集、记忆组装在一起,内部驱动一个 agentic loop
 (模型思考 -> 调用工具 -> 观察结果 -> 继续,直到产出最终输出)来完成一个 Stage。

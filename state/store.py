@@ -1,4 +1,4 @@
-"""StateStore —— 通用共享状态接口(docs/framework-design.md §5)。
+"""StateStore —— 通用共享状态接口。
 
 引擎不关心 path 指向的字段语义,只提供统一的读写原语。所有后端(内存、
 JSON 文件等)实现同一接口,便于替换与测试。path 采用点分路径寻址,如

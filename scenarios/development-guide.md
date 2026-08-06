@@ -1,35 +1,31 @@
 # 场景开发指南
 
-本文档面向想在 MiniAgent 框架上**开发一个新场景**的人,是一份动手向导(怎么落地),
-不是概念设计文档(那是 [docs/framework-design.md](../docs/framework-design.md))。建议
-顺序:先读一遍 framework-design.md 建立概念模型(Node/Stage/Agent/ToolSet/StateStore/
-四个控制流原语),再回来看本文档"怎么把这些概念拼成一个跑得起来的场景包"。
+本文档面向想在 MiniAgent 框架上**开发一个新场景**的人,是一份动手向导(怎么落地)。
+建议顺序:先读一遍 [README.md](../README.md) 建立概念模型(Node/Stage/Agent/ToolSet/
+StateStore/控制流原语),再回来看本文档"怎么把这些概念拼成一个跑得起来的场景包"。
+框架层每个模块自己的 docstring(如 `engine/stage.py`、`engine/primitives/loop.py`)是
+概念定义与取舍理由的权威来源,本文档是实战向导,遇到冲突以模块 docstring 为准。
 
 阅读本文档前请先确认一件事:**框架层(`engine`/`agent`/`state`/`llm`/`tools`)不需要,
 也不应该改动。** 开发一个新场景 = 在 `scenarios/` 下新建一个包,用框架已经提供的构件
 拼出你自己的流程、状态、能力,仅此而已。
 
-场景包**直接用 Python 组装**:场景包里一个 `workflow.py` 直接 `Stage`/`Sequence`/
-`Loop`/`ForEach`/`Checkpoint` 拼出 `Workflow`,没有 YAML 声明式配置这一层——想知道
-某个节点具体读写什么状态、挂了什么 ToolSet,直接看 Python 源码即可,不需要在"配置"
-和"配置的解释器"之间来回跳。
+场景包**直接用 Python 组装**:场景包里一个 `workflow.py` 直接用 `Stage`/`Sequence`/
+`Loop`/`ForEach`/`Checkpoint`/`Breaker`/`Continuer` 拼出 `Workflow`,没有 YAML 声明式
+配置这一层——想知道某个节点具体读写什么状态、挂了什么 ToolSet,直接看 Python 源码
+即可,不需要在"配置"和"配置的解释器"之间来回跳。
 
 ## 0. 可以直接抄的范例
 
-仓库里已经有两个真实场景,遇到具体问题时直接去看它们的源码往往比读文档更快:
+仓库里已经有一个真实场景,遇到具体问题时直接去看它的源码往往比读文档更快:
 
 | 场景 | 特点 | 适合参考什么 |
 |---|---|---|
-| [`scenarios/novel/`](novel/) | 题材写死在流程 prompt 里;有人工审阅断点 | Loop/ForEach/Checkpoint 三者组合、评审节点的状态旁路写回 |
-| [`scenarios/short/`](short/) | 内容与流程严格分离;全自动无人工介入 | 确定性体检与 LLM 判断的分工、大量小节点的 `nodes/` 目录组织方式 |
+| [`scenarios/example/`](example/) | 测试用例设计工作流:需求解析 → 初稿 → 需求方评审 → (Loop:待处理检查 → 改稿 → 复审) → 用例落地 | Sequence 接 Loop 的整体编排、`Breaker` 做"没有待处理项就提前结束"的短路判断、`nodes/` 目录按业务分组的组织方式 |
 
-如果还没准备好挂 LLM,只想先把"数据怎么声明"和"四个控制流原语怎么用"跑一遍
-看明白,看 [`scenarios/examples/`](examples/)——不需要 API Key,`python -m
-scenarios.examples.run` 秒开秒跑,尤其把 `Loop` 的 `continue_when`("continue")
-与 `Breaker`("break")这两个容易混淆的概念拆开单独演示,§6 的写法就是照抄那里。
-
-两者跑在同一套引擎上(`Sequence`/`Loop`/`ForEach`/`Checkpoint`/`Stage`),差别只在
-业务需求(题材是否写死、要不要人工介入),不在组装方式。
+跑起来不需要接 LLM 的框架原语速查(数据怎么声明、控制流原语怎么组合),直接看
+`engine/primitives/` 下各文件的模块 docstring 与 `tests/engine/` 里对应的单元测试
+——每个原语的边界条件都有测试用例可以照抄。
 
 ## 1. 一个场景包长什么样
 
@@ -37,36 +33,36 @@ scenarios.examples.run` 秒开秒跑,尤其把 `Loop` 的 `continue_when`("conti
 
 ```
 scenarios/<name>/
-├── state_schema.py        # 该场景要跨节点追踪的共享状态结构(state.schema.StateSchema)
-├── nodes/                 # 按业务分组,每个模块提供 build_xxx_stage() 函数
-│   ├── common.py           #   跨节点复用:Agent 组装、状态路径常量、判定合并
-│   ├── outline.py           #   build_outline_generation_stage() / build_outline_critic_stage()
+├── schemas/                # 该场景要跨节点追踪的共享状态结构(state.schema.StateSchema)
+├── nodes/                  # 按业务分组,每个模块提供 build_xxx_node() 函数
+│   ├── common.py            #   跨节点复用:Agent 组装、状态路径常量、判定合并
+│   ├── review.py             #   build_review_node() 之类的具体节点
 │   └── ...
-├── toolsets/*.py           # 每个 Stage 需要的能力(**主要开发工作量**)
-├── prompts.py              # 流程侧提示词,模块级字符串常量
-├── workflow.py              # build_workflow(client_factory) -> Workflow,在这里拼 Sequence/Loop/ForEach
-├── landing.py               # 把最终 State 落地成 Markdown/JSON 等交付物(可选)
-├── brief.yaml / brief.py   # 用户输入的题材/设定,与"流程怎么跑"严格分开(可选,见 §7)
-└── run.py                  # 组装 LLMClient / StateStore / RunContext 并运行
+├── toolsets/*.py            # 每个 Stage 需要的能力(**主要开发工作量**,可选)
+├── prompts.py               # 流程侧提示词,模块级字符串常量
+├── workflow.py               # build_workflow(client_factory, ...) -> Workflow,在这里拼装
+├── landing.py                # 把最终 State 落地成 Markdown/JSON 等交付物(可选)
+└── run.py                   # 组装 LLMClient / StateStore / RunContext 并运行
 ```
 
+（参见 [`scenarios/example/`](example/) 的实际目录,字段名和分组可以按场景需要调整,
+上面是常见形态,不是强制约束。）
+
 **唯一不该出现的东西:对 `engine`/`agent`/`state`/`llm`/`tools` 里任何文件的修改。** 如果
-你发现自己想改这些目录,先重新检查一遍是不是把"业务策略"当成了"控制流形状"去改引擎
-——判断标准见 framework-design.md §6.5。
+你发现自己想改这些目录,先重新检查一遍是不是把"业务策略"当成了"控制流形状"去改引擎。
 
 ## 2. 先想清楚:拆几个 Stage、哪里要 Loop、哪里要 ForEach
 
-在写任何代码之前,按 framework-design.md §8 的步骤在纸面上想清楚这几件事,后面的编码
-只是把这些结论翻译成 Python:
+在写任何代码之前,先在纸面上想清楚这几件事,后面的编码只是把这些结论翻译成 Python:
 
-1. **State Schema**:这个场景要跨步骤追踪哪些事实?(小说场景是"故事圣经":人物、
-   世界观、章节大纲;short 场景是"制作单":骨架、角色、爽点、分节大纲)
+1. **State Schema**:这个场景要跨步骤追踪哪些事实?(参考 `scenarios/example/` 的
+   测试设计场景:需求文档原文、草稿中的用例、已评审通过的用例、被驳回归档的用例)
 2. **拆 Stage**:整个任务拆成哪几步,每步的输入输出是什么?
-3. **哪些环节需要质检**:给对应 Stage 套一层 `Loop`(生成 → 评审,`continue_when`
-   是一个判定谓词,读评审产出的"还要再改一轮"字段)。
-4. **哪些环节要对列表重复处理**(逐章/逐节/逐条):套一层 `ForEach`。
+3. **哪些环节需要反复迭代**:给对应节点套一层 `Loop`,并在 body 里放一个
+   `Continuer`(判定"还要不要再来一轮")和/或 `Breaker`(判定"要不要提前结束")。
+4. **哪些环节要对列表重复处理**(逐条/逐项):套一层 `ForEach`。
 5. **哪些节点需要人工介入**:插入 `Checkpoint`;如果人工审阅该落在某个 `Loop` 的评审
-   环节里,直接加在该 `Loop` 的 `body` 末尾(排在 AI critic 之后)。
+   环节里,直接加在该 `Loop` 的 `body` 里对应位置。
 6. **每个 Stage 需要什么能力**:开发对应的 `ToolSet`——这是主要工作量所在,1-5 步
    通常一次设计好之后很少再变。
 
@@ -76,40 +72,22 @@ scenarios/<name>/
 
 ### 3.1 每个节点怎么定义
 
-`nodes/<group>.py` 里每个 `build_xxx_stage(client)` 函数负责"这一个节点是什么":
+`nodes/<group>.py` 里每个 `build_xxx_node(client)` 函数负责"这一个节点是什么":
 
 ```python
-def build_outline_generation_stage(client: LLMClient) -> Stage:
-    agent = make_agent(client, prompts.OUTLINE, output_schema=OUTLINE_AGENT_SCHEMA)
-
-    def executor(ctx: RunContext, inputs: dict) -> dict:
-        state = inputs.get("state", {})
-        out = agent.run(ctx, {...})           # 组装 payload,交给 Agent 跑一次
-        return {SECTIONS_PATH: [...], PAYOFFS_PATH: [...]}   # 拼装/裁剪模型的产出
-
+def build_review_node(client: LLMClient) -> Node:
+    agent = make_agent(client, prompts.REVIEW, output_schema=REVIEW_OUTPUT_SCHEMA)
     return Stage(
-        name="outline_generation",
-        executor=executor,
-        reads=[...],
-        writes=[SECTIONS_PATH, PAYOFFS_PATH],
-        output_schema=OUTLINE_OUTPUT_SCHEMA,
+        name="review",
+        executor=agent.run,
+        reads=[DRAFT_PATH, REVIEWED_PATH, DEPRECATED_PATH, REQUIREMENT_DOC_PATH],
+        writes=[DRAFT_PATH, DEPRECATED_PATH, REVIEWED_PATH],
+        output_schema=REVIEW_OUTPUT_SCHEMA,
     )
 ```
 
 如果节点不需要对模型的产出做任何加工(直接把 Agent 的输出当 Stage 的输出),
-`executor` 可以就是 `agent.run` 本身,不必包一层:
-
-```python
-def build_concept_expansion_stage(client: LLMClient) -> Stage:
-    agent = make_agent(client, prompts.CONCEPT_EXPANSION, output_schema=CONCEPT_EXPANSION_OUTPUT_SCHEMA)
-    return Stage(
-        name="concept_expansion",
-        executor=agent.run,
-        reads=[META_PATH],
-        writes=[META_PATH],
-        output_schema=CONCEPT_EXPANSION_OUTPUT_SCHEMA,
-    )
-```
+`executor` 可以就是 `agent.run` 本身,不必包一层——上面这个例子就是如此。
 
 `make_agent` 是场景方在自己的 `nodes/common.py` 里写的一个小工具函数,不是框架接口:
 
@@ -143,69 +121,69 @@ def build_input_parsing_stage() -> Stage:
 `run(ctx, inputs)`)的包装类,把原节点包在里面——不需要继承任何基类:
 
 ```python
-class _ChapterCriticWithStatusWriteback:
+class _WithStatusWriteback:
     def __init__(self, node: Node) -> None:
         self._node = node
         self.name = node.name
 
     def run(self, ctx: RunContext, inputs: dict) -> dict:
-        verdict = self._node.run(ctx, inputs)
-        if not verdict.get(NEEDS_REVISION_KEY):
-            _set_chapter_status(ctx, ..., "reviewed")
-        return verdict
+        outputs = self._node.run(ctx, inputs)
+        if not outputs.get(NEEDS_REVISION_KEY):
+            _mark_done(ctx, ...)
+        return outputs
 ```
-
-见 [scenarios/novel/nodes/chapter.py](novel/nodes/chapter.py) 的完整实现与取舍说明
-(framework-design.md §6.5 "场景自定义节点"是这一手法的设计依据)。
 
 ### 3.2 Workflow 怎么拼
 
-`workflow.py` 的 `build_workflow(client_factory)` 负责"这些节点怎么串":直接
-`import` 各 `nodes/*.py` 的 `build_xxx_stage`,用 `Sequence(name=..., nodes=[...])`/
-`Loop(name=..., body=[...], continue_when=..., max_iterations=..., on_exceed=...)`/
+`workflow.py` 的 `build_workflow(client_factory, ...)` 负责"这些节点怎么串":直接
+`import` 各 `nodes/*.py` 的 `build_xxx_node`,用 `Sequence(name=..., nodes=[...])`/
+`Loop(name=..., body=[...], max_iterations=..., on_exceed=...)`/
 `ForEach(name=..., items_path=..., body=...)` 拼出一棵 `Node` 树,最后包成
-`Workflow(name=..., nodes=[...], state_schema=...)`:
+`Workflow(name=..., nodes=[...], state_schema=...)`(改编自
+[`scenarios/example/workflow.py`](example/workflow.py)):
 
 ```python
-def build_workflow(client_factory: ClientFactory) -> Workflow:
+def build_workflow(client_factory: ClientFactory, requirement_doc: str, output_path: str) -> Workflow:
     def client_for(stage_name: str, model: str | None = None) -> LLMClient:
         return client_factory(stage_name, model)
 
     nodes = [
-        Sequence(name="setup", nodes=[
-            build_input_parsing_stage(),
-            build_concept_expansion_stage(client_for("concept_expansion")),
-        ]),
-        Loop(
-            name="outline_loop",
-            continue_when=lambda ctx, outputs: outputs.get("needs_revision", False),
-            max_iterations=2,
-            body=[
-                build_outline_generation_stage(client_for("outline_generation")),
-                build_outline_critic_stage(client_for("outline_critic")),
+        Sequence(
+            name="first_draft",
+            nodes=[
+                build_requirement_parse_node(requirement_doc_path=requirement_doc),
+                build_first_draft_node(client=client_for("first_draft")),
+                build_review_node(client=client_for("review")),
             ],
+        ),
+        Loop(
+            name="redraft_loop",
+            max_iterations=3,
             on_exceed=OnExceed.ACCEPT_LAST,
+            body=[
+                # 没有待处理用例时直接结束整个 Loop,不必再白跑一轮 redraft+review。
+                Breaker(
+                    name="pending_check",
+                    predicate=lambda ctx, _inputs: not ctx.state.get(DRAFT_PATH),
+                ),
+                build_redraft_node(client=client_for("redraft")),
+                build_review_node(client=client_for("review")),
+                # 还有待处理用例时继续下一轮改稿;见 §6 对 Continuer 的说明。
+                Continuer(
+                    name="pending_continue",
+                    predicate=lambda ctx, _inputs: bool(ctx.state.get(DRAFT_PATH)),
+                ),
+            ],
         ),
-        ForEach(
-            name="section_loop",
-            items_path="short_story.sections",
-            body=Sequence(nodes=[build_section_drafting_stage(client_for("section_drafting")), ...]),
-        ),
-        build_final_qa_stage(),
+        build_testcase_output_node(output_path=output_path),
     ]
-    return Workflow(name="short_story_generation", nodes=nodes, state_schema=SHORT_STORY_SCHEMA)
+    return Workflow(name="test_case_workflow", nodes=nodes, state_schema=TEST_DESIGN_STATE_SCHEMA)
 ```
 
 `client_factory` 的签名是 `(stage_name: str, model: str | None) -> LLMClient`,由
 `run.py` 提供(通常按 `model` 分组、惰性构造并复用 client)。哪个节点用哪个模型,
 在这里**直接传字面量**决定即可——"一组节点共用同一个模型"就是把同一个字符串传给
-这组节点各自的 `client_for` 调用,不需要额外的继承/解析机制:
-
-```python
-build_concept_expansion_stage(client_for("concept_expansion", "claude-sonnet-5")),
-build_character_world_design_stage(client_for("character_world_design", "claude-sonnet-5")),
-# 其余节点不传 model(即传 None),退回 client_factory 自己的默认模型。
-```
+这组节点各自的 `client_for` 调用,不需要额外的继承/解析机制。
 
 ## 4. 状态设计(State Schema)
 
@@ -213,19 +191,20 @@ build_character_world_design_stage(client_for("character_world_design", "claude-
 构造(标量类型、`OneOf` 枚举、`[子描述符]` 同构列表、`ANY` 不约束):
 
 ```python
-# state_schema.py
+# schemas/state.py
 from state.schema import OneOf, StateSchema
 
-CHARACTER = {
+TEST_CASE = {
     "id": str,
-    "name": str,
-    "role": OneOf("protagonist", "antagonist", "supporting"),
+    "title": str,
+    "steps": [str],
+    "priority": OneOf("high", "medium", "low"),
 }
-SHORT_STORY_DEFINITION = {"short_story": {"characters": [CHARACTER], ...}}
-SHORT_STORY_SCHEMA = StateSchema(name="short_story", definition=SHORT_STORY_DEFINITION)
+STATE_DEFINITION = {"test_design_state": {"drafted_cases": [TEST_CASE], ...}}
+TEST_DESIGN_STATE_SCHEMA = StateSchema("test_design_state", STATE_DEFINITION)
 
 def empty_state() -> dict:
-    return SHORT_STORY_SCHEMA.empty()
+    return TEST_DESIGN_STATE_SCHEMA.empty()
 ```
 
 完整的类型树写法见 [state/schema.py](../state/schema.py) 模块开头的文档。几条要
@@ -235,10 +214,9 @@ def empty_state() -> dict:
   (`patch` 只带本次变更的字段),校验的是"类型对不对",不是"填没填全"。
 - 没有专门的"可空"类型:一个字段要么有确定类型(缺省时是该类型的零值),要么整个子树
   用 `ANY` 完全不约束。
-- 子结构(如 `CHARACTER`)常常要在多处复用(既是共享状态的一部分,也是某个 Stage
-  `output_schema` 的一部分)——提成模块级常量,在 `nodes/*.py` 里直接 `import` 复用,
-  不要重复内联同一段结构(参考 [scenarios/short/nodes/outline.py](short/nodes/outline.py)
-  怎么从 `state_schema.py` 借用 `SECTION`/`PAYOFF`)。
+- 子结构(如上面的 `TEST_CASE`)常常要在多处复用(既是共享状态的一部分,也是某个
+  Stage `output_schema` 的一部分)——提成模块级常量,在 `nodes/*.py` 里直接 `import`
+  复用,不要重复内联同一段结构。
 - `StateSchema.empty()` 生成一份类型正确的空状态,作为一次新运行的起点。
 - `StateSchema.to_prompt_example()` 把 definition 渲染成占位符 JSON,如果你的场景需要
   在提示词里给一份格式示例可以用它生成,但通常不需要——`output_schema` 已经通过
@@ -279,7 +257,7 @@ Stage(
 `{"output": content}`,不会让整个 run 失败,但基本等于这个节点白跑了一次,排查时先
 看这里)。
 
-## 6. 四个控制流原语实战
+## 6. 控制流原语实战
 
 ### Sequence —— 顺序
 
@@ -289,52 +267,50 @@ Sequence(name="setup", nodes=[stage_a, stage_b])
 ```
 上一个节点的 `outputs` 直接作为下一个的 `inputs`。没有特殊行为。
 
-### Loop —— 反复跑同一份输入直到判定放行
+### Loop —— 反复跑同一份输入,由 Continuer/Breaker 决定停不停
 
 ```python
-from engine.primitives.loop import Loop, OnExceed, loop_cursor_path
+from engine.primitives.loop import Loop, OnExceed
+from engine.primitives.continuer import Continuer
+from engine.primitives.breaker import Breaker
 
 Loop(
-    name="outline_loop",
-    body=[outline_generation, outline_critic],   # 一轮依次跑,规则同 Sequence
-    continue_when=lambda ctx, outputs: outputs.get("needs_revision", False),  # 真 = 还要重开一轮
+    name="redraft_loop",
+    body=[
+        outline_generation,
+        outline_critic,
+        Continuer(name="needs_revision", predicate=lambda ctx, outputs: outputs.get("needs_revision", False)),
+    ],
     max_iterations=2,
     on_exceed=OnExceed.ACCEPT_LAST,   # 还有 ESCALATE_TO_CHECKPOINT / RAISE
 )
 ```
 
-`continue_when` 是一个判定谓词 `(ctx, outputs) -> bool`,不是状态路径字符串——和
-`Breaker` 的 `predicate` 同一种签名风格(见下面的 Breaker 小节)。几条不看源码容易
-踩的坑:
+**"要不要重开一轮"由 body 里的 `Continuer` 节点决定,不是引擎自动问出来的。** 这一点
+和很多人对"循环"的直觉相反,务必记住:
 
-- **谓词会在 body 里每一个节点跑完后都被调用一次**(不是只调用"评审"那一个,也
-  不是整条 body 跑完才判一次),所以要用 `outputs.get("needs_revision", False)`
-  这类防御性写法,不要用 `outputs["needs_revision"]`——生成类节点的 outputs 里
-  没有这个字段,直接按键取会在生成节点跑完后就抛 `KeyError`。
-- 判定字段的极性建议朝"还要再改"为真去命名(如 `needs_revision`)而不是
-  `passed`——引擎侧的极性是固定的(谓词返回 `True` 才重开一轮),但谓词内部想
-  怎么取反完全是你自己的事(比如上游用 `passed` 命名,谓词写成
-  `lambda ctx, outputs: not outputs.get("passed", True)` 也完全可以)。
-- **`body` 顺序很重要**:`[生成, AI 评审, 人工确认]` 才能让 AI 判否时短路掉人工
-  确认这一步(判定放在每个节点之后,AI 判否时 Loop 立即重开一轮,不会往下跑到
-  人工确认);反过来排会导致人工确认判否之后 body 还傻乎乎往下跑。同一个
-  `continue_when` 谓词会在 AI 评审、人工确认两个节点跑完后各被调用一次,只要两者
-  outputs 形状一致(都是 `{needs_revision, feedback}`),写一个谓词就够了,不需要
-  分别包装。
+- **极性是反的。** body 完整跑完一轮、期间没有任何 `Continuer`/`Breaker` 触发 =
+  "通过",Loop 到此结束(不会自动再来一轮)。想要"反复跑到某个条件满足为止",必须
+  显式在 body 里放一个 `Continuer`,在条件不满足时触发。
+- **`Continuer`/`Breaker` 是放进 body 里的普通 Node**,自带
+  `predicate(ctx, inputs) -> bool`,可以放在 body 的任意位置,互不知晓对方存在:
+  `Continuer` 为真时跳过本轮 body 剩下的节点、从 body[0] 重开下一轮(相当于 Python
+  的 `continue`);`Breaker` 为真时立即结束整个 Loop(相当于 `break`,区别于跑满
+  `max_iterations` 触发的 `on_exceed` 三选一)。
+- **`body` 顺序很重要**:短路是白拿的——`Continuer`/`Breaker` 放在某个节点之后,
+  前面的节点已经执行、后面的节点不会执行。比如
+  `[生成, AI 评审, Continuer(还要改吗), 人工确认]` 能让 AI 判定"还要改"时直接跳过
+  人工确认这一步、重开下一轮。
 - **下一轮怎么知道上一轮为什么没过**:body 里的第一个节点(通常是"生成"节点)要在
-  自己的 `reads` 里加上 `loop_cursor_path("outline_loop")`(即
-  `"_loop.outline_loop.last"`),这样能读到上一个节点(通常是评审)的产出。**务必用
+  自己的 `reads` 里加上 `loop_cursor_path("redraft_loop")`(即
+  `"_loop.redraft_loop.last"`),这样能读到上一轮最后一个节点的产出。**务必用
   `loop_cursor_path(name)` 函数拼这个路径,不要手写字符串**——否则改名字时容易漏改
-  一处导致读写对不上,`Loop`/`workflow.py` 两处应该共用同一个 `xxx_LOOP_NAME` 常量。
-  这条游标和 `continue_when` 判定谓词是两件独立的事:游标只负责"跨轮次传数据"
-  (评审意见),判定谓词直接对着刚跑完的节点的 outputs 求值,不需要经过游标、也
-  不需要经过 State 走一趟。
+  一处导致读写对不上。
 - **没有人工介入时,`on_exceed` 不要用 `ESCALATE_TO_CHECKPOINT`**——没有人在等着裁决,
   升级只会把流程卡死(`ctx.checkpoint_handler` 为 `None` 时直接报错)。全自动场景
-  (如 `short/`)两个 Loop 都用 `ACCEPT_LAST`。
+  两个 Loop 都用 `ACCEPT_LAST`。
 - 跑满 `max_iterations` 仍不过关、又用了 `ACCEPT_LAST` 时,把"这一处仍不达标"的
-  事实交代清楚(如 `short/` 的 `final_qa` 会把残留问题写进 `qa_report`),不要悄悄
-  放过去。
+  事实交代清楚(写进产物的某个字段),不要悄悄放过去。
 
 ### ForEach —— 遍历一个列表
 
@@ -343,7 +319,7 @@ from engine.primitives.foreach import ForEach
 
 ForEach(
     name="section_loop",
-    items_path="short_story.sections",     # 遍历这个列表
+    items_path="story.sections",     # 遍历这个列表
     body=Sequence(nodes=[drafting, Loop(...)]),   # 对每个元素跑的子流程
 )
 ```
@@ -371,42 +347,30 @@ Checkpoint(
 - 需要 `ctx.checkpoint_handler`(见 §8),没配置就是配置错误、直接报错——不是"挂起等
   以后再答"的意思;真要"以后再答",在 handler 内部抛异常即可(会被通用失败路径接住,
   见 §8 的续跑机制)。
-- 放进某个 `Loop` 的 `body` 末尾(AI critic 之后),就"零成本"组合出了"AI 先挡、
+- 放进某个 `Loop` 的 `body` 里(AI critic 之后),就"零成本"组合出了"AI 先挡、
   通过后人工再把关"——`Checkpoint.run()` 的返回值(流入的 inputs 与人工输入合并)
-  天然是评审契约的超集,可以直接当 `Loop.body` 里的一关,人工判否同样驱动下一轮重写。
-
-### Breaker —— 提前跳出 Loop/ForEach(不常用,按需了解)
-
-```python
-from engine.primitives.breaker import Breaker
-Breaker(name="early_exit", predicate=lambda ctx, inputs: 某个条件)
-```
-放进 `Loop`/`ForEach` 的 body 里,`predicate` 为真时抛 `LoopBreak`,由最近的外层
-`Loop`/`ForEach` 捕获:对 `Loop`相当于"提前放行、接受当前结果结束循环"(区别于跑满
-`max_iterations` 触发的 `on_exceed`);对 `ForEach` 相当于 Python 的 `break`。
+  天然是评审契约的超集,可以直接接一个 `Continuer` 驱动下一轮重写。
 
 ## 7. Prompt 与用户输入分离(强烈建议遵守)
 
-这是 `scenarios/short/` 验证过的一条经验,`scenarios/novel/` 是反例(把题材焊死在了
-流程 prompt 里,导致那份场景只能服务一个题材)。约定:
+约定:
 
-- **用户 prompt**(写什么:题材、主角、禁忌……)落在一份独立的 brief 文件里
-  (`brief.yaml` + 校验代码 `brief.py`),只经 State 的 `xxx.brief` 字段与流程相接。
+- **用户 prompt**(写什么:题材、约束、禁忌……)落在一份独立的输入文件里(比如
+  `brief.yaml` + 校验代码),只经 State 的某个字段与流程相接。
 - **流程 prompt**(怎么写:结构、语言底线、各节点职责)落在 `prompts.py` 里,**不
-  允许出现任何具体的人名/时代/世界观/题材内容**;换任何题材都不需要改这里一个字。
-- 如果流程 prompt 需要一份"没有更具体设定时的默认参考"(如 `short/` 的
-  `TROPE_BANK` 起步词库),这是该边界唯一允许的例外,且要在代码注释里写清楚为什么
-  ("只在用户留空时给一个参考起点,用户写明的部分它让位")。
+  允许出现任何具体的业务内容**;换任何输入都不需要改这里一个字。
+- 如果流程 prompt 需要一份"没有更具体设定时的默认参考",这是该边界唯一允许的例外,
+  且要在代码注释里写清楚为什么("只在用户留空时给一个参考起点,用户写明的部分它
+  让位")。
 
-判断你新写的一段 prompt 是否越界的简单测试:**换一个完全不同的题材,这段文字要不要
+判断你新写的一段 prompt 是否越界的简单测试:**换一个完全不同的输入,这段文字要不要
 改一个字?** 要改,就说明它混入了用户输入该管的内容。
 
 ## 8. 运行入口 `run.py` 该做哪些事
 
-`run.py` 通常要做这几件事(可直接参考 [`scenarios/short/run.py`](short/run.py) 或
-[`scenarios/novel/run.py`](novel/run.py)):
+`run.py` 通常要做这几件事(可直接参考 [`scenarios/example/run.py`](example/run.py)):
 
-1. **加载用户 brief**,先校验、后组装——设定写错时应该立刻报错,而不是跑到第一个
+1. **加载用户输入**,先校验、后组装——设定写错时应该立刻报错,而不是跑到第一个
    节点才失败(那时可能已经产生了 API 调用费用)。
 2. **构造 `client_factory: (stage_name, model) -> LLMClient`**,按需惰性构造并按
    `model` 分组复用 client(同一个 model 不要反复建连接)。`model` 为 `None` 时退回
@@ -426,14 +390,14 @@ Breaker(name="early_exit", predicate=lambda ctx, inputs: 某个条件)
 
 ## 9. 测试
 
-框架层与场景层的测试都在 [`tests/`](../tests/)(镜像 `scenarios/` 的目录结构,如
-`tests/scenarios/short/`),只用标准库 `unittest`:
+框架层的测试都在 [`tests/`](../tests/)(镜像 `engine`/`agent`/`state`/`llm`/`tools`
+的目录结构),只用标准库 `unittest`:
 
 ```bash
 python3 -m unittest discover -s tests -t .
 ```
 
-给新场景写测试时,建议至少覆盖:
+给新场景写测试时(镜像结构放在 `tests/scenarios/<name>/`),建议至少覆盖:
 
 - **确定性 executor/toolset 的纯函数逻辑**(字数统计、结构校验、判定合并这类不需要
   真的调用 LLM 的部分)——这部分最容易测,也最该测,因为它们是"能算的不交给模型判断"
@@ -441,10 +405,10 @@ python3 -m unittest discover -s tests -t .
 - **State Schema 的校验行为**(必填/类型/枚举是否符合预期)。
 - **流程结构的装配是否正确**——不一定要真的调 LLM,可以用一个返回固定内容的假
   `LLMClient` 走一遍 `build_workflow` + `Workflow.run`,验证 `reads`/`writes`/游标
-  路径接得对不对(`tests/scenarios/short/test_pipeline.py`、
-  `tests/scenarios/novel/test_review_rounds.py` 是这类验证的例子)。
-- **prompt 与用户输入分离的边界**(如 `short/` 的测试专门守着"流程 prompt 里不出现
-  任何题材内容"这条约束)——如果你的场景也有类似的分层约定,值得写一条同类测试。
+  路径接得对不对。`tests/engine/test_loop.py` 是这类"假 LLM/假 Node + 断言状态流转"
+  写法的参考。
+- **prompt 与用户输入分离的边界**——如果你的场景也有类似的分层约定,值得写一条
+  同类测试。
 
 ## 10. 开发新场景 Checklist
 
@@ -458,17 +422,4 @@ python3 -m unittest discover -s tests -t .
 6. 写 `run.py`(§8)。
 7. 写 `landing.py` 把产物落地成人可读的交付物。
 8. 补测试(§9)。
-9. 在 `scenarios/README.md` 里补一行,登记这个新场景。
-
-## 11. 参考文档
-
-- [docs/framework-design.md](../docs/framework-design.md) —— 框架设计的权威来源,概念
-  定义与取舍理由都在这里,本文档里的实战建议如果与它冲突,以它为准。
-- [docs/workflow-design.md](../docs/workflow-design.md)、
-  [docs/story-bible-schema.md](../docs/story-bible-schema.md) —— `novel` 场景作为
-  框架第一个实例的完整设计。
-- [scenarios/README.md](README.md) —— 场景层总览。
-- [scenarios/novel/](novel/)、[scenarios/short/](short/) —— 两个完整可运行范例,
-  连同各自的 `README.md`。
-- [scenarios/examples/](examples/) —— 不挂 LLM 的原语速查手册,数据声明 + 四个
-  控制流原语(尤其 continue/break)的最小可运行示例。
+9. 在本文档 §0 的表格里补一行,登记这个新场景。

@@ -4,7 +4,7 @@
 
 ## 项目定位
 
-在动手之前，建议先读一遍 [README.md](README.md) 和 [docs/framework-design.md](docs/framework-design.md)，
+在动手之前，建议先读一遍 [README.md](README.md)，
 理解框架层（`engine`/`agent`/`state`/`llm`/`tools`）与场景层（`scenarios/`）的边界：
 
 - **框架层**的改动应保持场景无关，任何看起来像"为了某个场景而加"的字段/分支，通常说明设计错了地方。

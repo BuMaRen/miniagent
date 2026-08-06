@@ -1,4 +1,4 @@
-"""Agent 与 ToolSet —— 场景能力的挂载点(docs/framework-design.md §4)。
+"""Agent 与 ToolSet —— 场景能力的挂载点。
 
 Agent = LLM Client + ToolRegistry + ToolSets(工具集) + Memory。
 它是 Stage 的典型执行体(executor)。给同一个抽象 Stage 挂载不同 ToolSet,

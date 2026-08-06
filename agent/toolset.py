@@ -1,4 +1,4 @@
-"""ToolSet —— 一组赋予 Agent 特定能力的工具(docs/framework-design.md §4)。
+"""ToolSet —— 一组赋予 Agent 特定能力的工具。
 
 ToolSet 本质上只是数据:一批 (tool_func, ToolSchema)。它不需要实例化成 Agent,
 可以被组合(一个 Agent 加载多个 ToolSet),语义清晰(ToolSet 是能力,Agent 是执行者)。

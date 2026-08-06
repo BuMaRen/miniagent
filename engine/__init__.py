@@ -1,7 +1,5 @@
 """工作流引擎核心(框架层,场景无关)。
 
-对应 docs/framework-design.md 的 §3(Stage)、§6(控制流原语)、§7(Workflow 定义)。
-
 这一层只负责"流程怎么串联、状态怎么读写、循环怎么退出",不含任何
 "大纲""章节"之类的场景语义。场景方通过组合这里的原语来定义具体工作流。
 
@@ -11,8 +9,8 @@
     RunContext  —— 一次运行贯穿始终的上下文(持有 StateStore / Checkpoint 处理器等)
     Workflow    —— 由 Node 组成的完整流程,可执行
 
-场景方直接用 Python 组合 Stage 与 engine/primitives/ 下的四个控制流原语拼出
-Workflow(见 scenarios/short/workflow.py、scenarios/novel/workflow.py 的范例),
+场景方直接用 Python 组合 Stage 与 engine/primitives/ 下的控制流原语拼出
+Workflow(见 scenarios/example/workflow.py 的范例),
 不存在从 YAML 等声明式定义编译节点这一层。
 """
 

@@ -10,8 +10,7 @@
     压缩哪些消息安全(compaction_candidates,负责保证不切断工具调用/结果配对),
     以及压缩结果如何回写(apply_compaction)。
   - 真正"怎么总结"(调 LLM 还是规则、摘要措辞)交给 Agent——因为只有 Agent
-    同时持有 LLMClient,而且具体 Prompt 措辞属于场景层,不属于这一层
-    (docs/framework-design.md §10)。
+    同时持有 LLMClient,而且具体 Prompt 措辞属于场景层,不属于这一层。
 """
 
 from __future__ import annotations

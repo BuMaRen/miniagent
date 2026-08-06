@@ -1,4 +1,4 @@
-"""Sequence —— 顺序执行原语(docs/framework-design.md §6.1)。
+"""Sequence —— 顺序执行原语。
 
 A -> B -> C:上一个节点的输出流入下一个节点的输入(也可只经由共享状态通信)。
 """

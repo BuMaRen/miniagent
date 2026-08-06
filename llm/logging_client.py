@@ -3,7 +3,7 @@
 包一层 LLMClient,不改变对外行为,只在每次 chat()/stream() 完成后把请求
 (messages/tools/params)与返回(response)序列化写入 log_dir,一次调用一个
 JSON 文件,便于运行结束后审计 Prompt 与模型回复。是否记录、记到哪里由调用方
-决定是否构造本类包一层(见 scenarios/novel/run.py 的 --log-chats)。
+决定是否构造本类包一层(见 scenarios/example/run.py 的 --log-chats)。
 """
 
 from __future__ import annotations

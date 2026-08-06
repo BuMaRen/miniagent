@@ -1,4 +1,4 @@
-"""Workflow —— 由 Node 组成的完整流程(docs/framework-design.md §7)。
+"""Workflow —— 由 Node 组成的完整流程。
 
 Workflow 是场景方最终交给引擎运行的对象:一串按顺序执行的顶层节点
 (每个节点可以是 Stage,也可以是 Sequence/Loop/ForEach/Checkpoint 等原语的嵌套)。

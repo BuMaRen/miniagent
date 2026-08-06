@@ -1,4 +1,4 @@
-"""控制流原语(docs/framework-design.md §6)。
+"""控制流原语。
 
 这些原语足以组合出目前设想的所有流程形态,且都实现 engine.stage.Node 协议,
 因此可以任意嵌套(例如 ForEach 的 body 是一个 Loop)。它们全部场景无关。

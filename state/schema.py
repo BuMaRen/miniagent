@@ -1,7 +1,7 @@
 """StateSchema —— 场景方提供的状态字段定义与校验。
 
 引擎自身不含任何字段语义;场景方通过一份 StateSchema 声明"这份共享状态长什么样"
-(小说场景的实例见 docs/story-bible-schema.md)。Schema 用于:初始化空状态、
+(实例见 scenarios/example/schemas/state.py)。Schema 用于:初始化空状态、
 校验 patch/append 写入是否合法、以及 Stage 的 input/output 契约校验。
 
 definition 的表示法(自定义"类型树",零三方依赖,与本仓库其余部分一致):

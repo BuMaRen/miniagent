@@ -1,4 +1,4 @@
-"""Stage —— 最小执行单元(docs/framework-design.md §3)。
+"""Stage —— 最小执行单元。
 
 Stage 是一个"输入 -> 输出"的契约容器。它本身不关心"怎么产出输出",
 只声明:谁来执行(executor)、需要从共享状态读哪些切片(reads)、会写哪些

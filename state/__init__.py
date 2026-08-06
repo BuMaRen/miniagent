@@ -1,4 +1,4 @@
-"""State Store —— 通用共享状态(docs/framework-design.md §5)。
+"""State Store —— 通用共享状态。
 
 引擎只提供 get / patch / append / slice 的通用读写接口,字段语义由场景方提供
 的 State Schema 决定。它把"一致性"从"依赖模型记住全文"变成"读写一份结构化数据"。
