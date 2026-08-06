@@ -1,5 +1,7 @@
 # MiniAgent
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 一个**与场景无关**的可复用 AI 工作流框架:提供 Stage(阶段)、ToolSet(能力挂载)、State Store(共享状态)、Loop(评审-修订循环)、ForEach(遍历子流程)、Checkpoint(人工断点)等通用构件。二次开发一个具体场景,通常只需要"定义 State Schema + 拼装这些原语 + 挂载/开发对应 ToolSet",而不需要重新设计流程结构。
 
 当前已有一个示例场景用于验证这套抽象是否好用,具体内容见 [scenarios/README.md](scenarios/README.md)。二次开发/专业化某个场景时,预期的改动方式是打磨/扩充对应 Stage 上挂载的 ToolSet,而不是改动引擎结构——详见 [docs/framework-design.md](docs/framework-design.md) §8。
