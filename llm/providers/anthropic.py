@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Iterator
 
 from anthropic import Anthropic
@@ -24,6 +25,7 @@ from tools.schema import ToolSchema
 
 _DEFAULT_MAX_TOKENS = 4096
 
+_STRUCTURED_OUTPUT_TOOL_NAME = "emit_structured_output"
 
 class AnthropicClient(LLMClient):
     def __init__(
@@ -91,10 +93,14 @@ class AnthropicClient(LLMClient):
         }
         if system:
             payload["system"] = system
-        if tools:
-            payload["tools"] = [t.to_anthropic() for t in tools]
+
+        anthropic_tools = [t.to_anthropic() for t in tools] if tools else []
         if response_schema is not None:
-            payload["output_config"] = _build_output_config(response_schema)
+            # Issue1: 用"强制调用工具"代替 output_config
+            anthropic_tools.append(_structured_output_tool(response_schema))
+            payload["tool_choice"] = {"type": "any", "disable_parallel_tool_use": True}
+        if anthropic_tools:
+            payload["tools"] = anthropic_tools
         return payload
 
 
@@ -105,6 +111,8 @@ def _to_chat_response(response: Any) -> ChatResponse:
     for block in response.content:
         if block.type == "text":
             content_text.append(block.text)
+        elif block.type == "tool_use" and block.name == _STRUCTURED_OUTPUT_TOOL_NAME:
+            content_text.append(json.dumps(block.input, ensure_ascii=False))
         elif block.type == "tool_use":
             tool_calls.append(
                 ToolCall(id=block.id, name=block.name, arguments=dict(block.input))
@@ -118,8 +126,23 @@ def _to_chat_response(response: Any) -> ChatResponse:
 
     usage = response.usage.model_dump() if response.usage else {}
 
-    return ChatResponse(message=message, tool_calls=tool_calls, usage=usage)
+    return ChatResponse(
+        message=message, 
+        tool_calls=tool_calls, 
+        usage=usage,
+        stop_reason=response.stop_reason,
+    )
 
+def _structured_output_tool(schema: dict[str, Any]) -> dict[str, Any]:
+    """把 provider-neutral 的 JSON Schema 包成 Anthropic 的 tool 结构。
+    强制模型通过"调用这个工具"的方式产出最终结构化结果,而不是走 output_config。
+    """
+    return {
+        "name": _STRUCTURED_OUTPUT_TOOL_NAME,
+        "description": "提交最终的结构化结果。这是本轮任务结束时必须调用的工具,不要把结果写成普通文本回复。",
+        "input_schema": schema or {"type": "object", "properties": {}},
+        "strict": True,
+    }
 
 def _build_output_config(schema: dict[str, Any]) -> dict[str, Any]:
     """把 provider-neutral 的 JSON Schema 包成 Anthropic 的 output_config 结构。"""
