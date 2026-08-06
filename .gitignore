@@ -1,0 +1,6 @@
+__pycache__
+.venv
+.claude
+.vscode
+site/runs/
+scenarios/*/output/

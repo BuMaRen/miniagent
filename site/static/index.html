@@ -1,0 +1,75 @@
+<title>短篇网文生成 · 生产界面</title>
+<link rel="stylesheet" href="/style.css">
+
+<div class="page">
+  <header>
+    <h1>短篇网文生成</h1>
+    <p class="subtitle">填好连接信息与故事设定,一键跑通 scenarios/short 的生成流程</p>
+  </header>
+
+  <form id="run-form">
+    <section class="card">
+      <h2>连接设置</h2>
+
+      <div class="field">
+        <label for="token-input">API Key <span class="required">*</span></label>
+        <div class="token-row">
+          <input id="token-input" type="password" autocomplete="off" placeholder="sk-..." />
+          <input id="token-locked" type="text" readonly style="display:none" />
+          <button type="button" id="token-change-btn" style="display:none">更改</button>
+        </div>
+        <p class="hint">仅用于本次请求,不会保存到任何文件;提交后无法复制回显。</p>
+      </div>
+
+      <div class="field">
+        <label for="base-url-input">Base URL</label>
+        <input id="base-url-input" type="text" placeholder="留空则使用官方默认地址" />
+        <p class="hint">自建/代理的 OpenAI 兼容地址(如阿里云百炼 compatible-mode),留空用默认。</p>
+      </div>
+
+      <div class="field">
+        <label for="model-input">模型 <span class="required">*</span></label>
+        <input id="model-input" type="text" placeholder="如 claude-sonnet-4-5、glm-5.2 或 qwen3.7-max" />
+        <p class="hint">以 claude 开头走 Anthropic 协议,以 glm 开头走智谱协议;其余按 OpenAI 兼容协议,需配合 Base URL 使用。</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>生成参数</h2>
+      <div id="brief-fields"></div>
+    </section>
+
+    <div class="submit-row">
+      <button type="submit" id="submit-btn">生成</button>
+      <span id="submit-error" class="error-text"></span>
+    </div>
+  </form>
+
+  <section class="card" id="progress-card" style="display:none">
+    <h2>运行进度</h2>
+    <p id="progress-status"></p>
+    <pre id="progress-log" class="terminal"></pre>
+  </section>
+
+  <section class="card" id="download-card" style="display:none">
+    <h2>下载</h2>
+    <div class="download-row">
+      <a id="download-product" class="button-link" href="#" download>下载成品</a>
+      <a id="download-debug" class="button-link secondary" href="#" download>下载调试日志包</a>
+    </div>
+  </section>
+</div>
+
+<div id="confirm-modal" class="modal-backdrop" style="display:none">
+  <div class="modal">
+    <h3>确认生成?</h3>
+    <div id="confirm-summary" class="confirm-summary"></div>
+    <p class="hint">确认后将调用生成流程,可能产生若干次模型调用费用与几分钟等待。</p>
+    <div class="modal-actions">
+      <button type="button" id="confirm-cancel">取消</button>
+      <button type="button" id="confirm-ok">确认生成</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
