@@ -62,7 +62,8 @@ class OpenAIClient(LLMClient):
             payload["response_format"] = _build_response_format(response_schema)
 
         completion = self._client.chat.completions.create(**payload)
-        choice = completion.choices[0].message
+        choice = completion.choices[0]
+        message_data = choice.message
 
         tool_calls = [
             ToolCall(
@@ -70,18 +71,23 @@ class OpenAIClient(LLMClient):
                 name=tc.function.name,
                 arguments=json.loads(tc.function.arguments or "{}"),
             )
-            for tc in (choice.tool_calls or [])
+            for tc in (message_data.tool_calls or [])
         ]
 
         message = Message(
             role="assistant",
-            content=choice.content,
+            content=message_data.content,
             tool_calls=tool_calls,
         )
 
         usage = completion.usage.model_dump() if completion.usage else {}
 
-        return ChatResponse(message=message, tool_calls=tool_calls, usage=usage)
+        return ChatResponse(
+            message=message, 
+            tool_calls=tool_calls, 
+            usage=usage,
+            stop_reason=choice.finish_reason,
+        )
 
     def stream(
         self,
@@ -109,13 +115,17 @@ class OpenAIClient(LLMClient):
         # 同一个 tool_call 的每个字段要按 index 对齐累加,收完才能整体解析。
         tool_call_chunks: dict[int, dict[str, Any]] = {}
         usage: dict[str, Any] = {}
+        stop_reason: str | None = None
 
         for chunk in self._client.chat.completions.create(**payload):
             if chunk.usage:
                 usage = chunk.usage.model_dump()
             if not chunk.choices:
                 continue
-            delta = chunk.choices[0].delta
+            choice = chunk.choices[0]
+            if choice.finish_reason:
+                stop_reason = choice.finish_reason
+            delta = choice.delta
 
             if delta.content:
                 content_parts.append(delta.content)
@@ -150,7 +160,12 @@ class OpenAIClient(LLMClient):
 
         yield StreamEvent(
             done=True,
-            response=ChatResponse(message=message, tool_calls=tool_calls, usage=usage),
+            response=ChatResponse(
+                message=message, 
+                tool_calls=tool_calls, 
+                usage=usage,
+                stop_reason=stop_reason,
+            ),
         )
 
 

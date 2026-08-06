@@ -23,14 +23,17 @@ class ChatResponse:
     """一次 chat 调用的标准化返回。
 
     Attributes:
-        message:    模型返回的 assistant 消息。
-        tool_calls: 便捷字段,等价于 message.tool_calls;非空表示需要执行工具后再续。
-        usage:      token 用量等元信息(可选,用于成本统计)。
+        message:     模型返回的 assistant 消息。
+        tool_calls:  便捷字段,等价于 message.tool_calls;非空表示需要执行工具后再续。
+        usage:       token 用量等元信息(可选,用于成本统计)。
+        stop_reason: 本轮结束原因(如 "end_turn"/"tool_use"/"max_tokens" 等),各
+                     Provider 取值不完全一致);用于判断输出是否被 max_tokens 截断。
     """
 
     message: Message
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: dict[str, Any] = field(default_factory=dict)
+    stop_reason: str | None = None
 
 
 @dataclass
@@ -110,7 +113,9 @@ class LLMClient(ABC):
         只取收尾事件里的 response,过程中的文本增量丢弃不用——chat() 的调用方
         要的是完整结果,不是逐字输出。
         """
-        for event in self.stream(messages, tools=tools, response_schema=response_schema, **params):
+        for event in self.stream(
+            messages, tools=tools, response_schema=response_schema, **params
+        ):
             if event.done:
                 if event.response is None:
                     raise RuntimeError("stream() 的收尾事件缺少 response")
