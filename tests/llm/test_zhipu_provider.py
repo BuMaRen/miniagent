@@ -101,7 +101,10 @@ class ChatEmptyTurnRetryTests(unittest.TestCase):
     """
 
     def _client(self):
-        client = ZhipuClient(api_key="x", model="glm-5.2", max_tokens=16384)
+        # max_tokens 特意选一个明显低于 STREAM_MAX_TOKENS_THRESHOLD 的值——这组
+        # 测试要覆盖的是非流式 chat() 里的"空轮重试"逻辑,不能让它意外撞上
+        # llm/client.py 的流式切换阈值(16384),那是另一套独立行为。
+        client = ZhipuClient(api_key="x", model="glm-5.2", max_tokens=4096)
         client._client = MagicMock()
         return client
 

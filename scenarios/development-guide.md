@@ -22,6 +22,7 @@ StateStore/控制流原语),再回来看本文档"怎么把这些概念拼成一
 | 场景 | 特点 | 适合参考什么 |
 |---|---|---|
 | [`scenarios/example/`](example/) | 测试用例设计工作流:需求解析 → 初稿 → 需求方评审 → (Loop:待处理检查 → 改稿 → 复审) → 用例落地 | Sequence 接 Loop 的整体编排、`Breaker` 做"没有待处理项就提前结束"的短路判断、`nodes/` 目录按业务分组的组织方式 |
+| [`scenarios/essay/`](essay/) | 短篇小说生产工作流:情节规划(可选人工 `Checkpoint`,最多返工 2 次、超限 `RAISE` 终止)→ 初稿 → 审核 →(Loop:短路 `Breaker` → 改稿 → 复审)→ 封面文案/图像 | `Loop` 内嵌 `Checkpoint` + `Continuer` 做"人工驳回驱动重新生成"、字数上下限等可计算的判定放代码里做并与 AI 判定合并(`nodes/common.merge_rejection`)、`llm.image_client.ImageClient` 这类框架层扩展接口的加法式引入、[`site/server.py`](../site/server.py) 用后台线程 + `threading.Event` 把同步阻塞的 `Checkpoint` 桥接成 HTTP 接口 |
 
 跑起来不需要接 LLM 的框架原语速查(数据怎么声明、控制流原语怎么组合),直接看
 `engine/primitives/` 下各文件的模块 docstring 与 `tests/engine/` 里对应的单元测试
@@ -397,7 +398,24 @@ Checkpoint(
 python3 -m unittest discover -s tests -t .
 ```
 
-给新场景写测试时(镜像结构放在 `tests/scenarios/<name>/`),建议至少覆盖:
+**`tests/` 只放框架层自己的单测,不要把场景的测试也塞进去。** 场景包是独立的
+——仓库当前把它们放在 `scenarios/` 下只是为了方便验证框架好不好用,后续这个
+仓库会当作一个三方库发布,`scenarios/` 整个目录(以及依赖它的 `site/`)会被
+移出去。给场景写测试,放在场景包自己目录下的 `tests/` 子目录(如
+`scenarios/<name>/tests/`),这样场景被移走时测试跟着一起走,不会在框架的
+`tests/` 里留下孤儿文件。运行方式:
+
+```bash
+python3 -m unittest discover -s scenarios/<name>/tests -t .
+```
+
+(参见 [`scenarios/essay/tests/`](essay/tests/) 的实际用法。`site/` 这类不叫
+`scenarios/*` 但同样"独立、以后可能被移走"的目录也遵循这个约定——[`site/tests/`](../site/tests/)
+就是这么放的;但如果目录名恰好撞上标准库模块名(`site` 正是这种情况),discover
+要用 `-t <目录本身>` 而不是 `-t .`,否则算出来的 dotted module name 会撞上标准库,
+细节见 [`site/tests/test_server.py`](../site/tests/test_server.py) 顶部的说明。)
+
+给新场景写测试时,建议至少覆盖:
 
 - **确定性 executor/toolset 的纯函数逻辑**(字数统计、结构校验、判定合并这类不需要
   真的调用 LLM 的部分)——这部分最容易测,也最该测,因为它们是"能算的不交给模型判断"

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>短篇小说生产工作流</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  fieldset { margin-bottom: 1rem; }
+  label { display: block; margin-top: 0.6rem; font-weight: 600; }
+  textarea, input[type=text], input[type=number], input[type=password] { width: 100%; box-sizing: border-box; padding: 0.4rem; margin-top: 0.2rem; }
+  textarea { min-height: 5rem; }
+  .row { display: flex; gap: 1rem; }
+  .row > div { flex: 1; }
+  button, a.btn { margin-top: 1rem; padding: 0.5rem 1.2rem; cursor: pointer; display: inline-block; }
+  a.btn { text-decoration: none; border: 1px solid #888; border-radius: 4px; color: inherit; background: #f0f0f0; }
+  a.btn:hover { background: #e0e0e0; }
+  .log-header { display: flex; align-items: center; gap: 0.8rem; }
+  .log-header button { margin-top: 0; padding: 0.3rem 0.8rem; font-size: 0.85rem; }
+  #log { background: #111; color: #ddd; padding: 0.8rem; height: 240px; overflow-y: auto; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; }
+  .terminated { color: #c0392b; font-weight: bold; }
+  #checkpoint { display: none; border: 2px solid #c0392b; padding: 1rem; margin-top: 1rem; background: #fff6f6; }
+  #result { margin-top: 1rem; }
+  #result img { max-width: 240px; display: block; }
+  details summary { cursor: pointer; font-weight: 600; margin-top: 0.6rem; }
+  .stage-row { border: 1px solid #ddd; border-radius: 4px; padding: 0.6rem; margin-top: 0.6rem; }
+  .stage-row > .stage-title { font-weight: 600; margin-bottom: 0.2rem; }
+  .hint { font-weight: 400; font-size: 0.85rem; color: #666; }
+  fieldset.required { border: 1px solid #c0392b; }
+  fieldset.required legend { color: #c0392b; font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>短篇小说生产工作流</h1>
+
+<form id="run-form">
+  <label>简介(剧情/设定,必填)</label>
+  <textarea id="synopsis" required placeholder="用户 prompt,可能是剧情简介和一些设定杂糅在一起"></textarea>
+
+  <div class="row">
+    <div>
+      <label>字数下限(&ge; 6000)</label>
+      <input type="number" id="min_words" value="6000" min="6000" max="20000" />
+    </div>
+    <div>
+      <label>字数上限(&le; 20000)</label>
+      <input type="number" id="max_words" value="12000" min="6000" max="20000" />
+    </div>
+  </div>
+
+  <label><input type="checkbox" id="human_review" /> 情节规划完成后需要人工审核(最多返工 2 次,超过则任务终止)</label>
+  <label><input type="checkbox" id="generate_cover" /> 生成封面(可选,不勾选则跳过封面文案/图像两个节点,省一次模型调用)</label>
+
+  <details>
+    <summary>高级选项</summary>
+    <label>类别(可选)</label>
+    <input type="text" id="category" />
+    <label>受众(可选,留空由 AI 推断)</label>
+    <input type="text" id="audience" />
+    <label id="cover-prompt-label">封面要求(可选,仅在勾选"生成封面"时生效)</label>
+    <textarea id="cover_prompt" placeholder="留空则由 AI 按受众自行设计"></textarea>
+  </details>
+
+  <fieldset class="required">
+    <legend>默认模型配置(必填)</legend>
+    <p class="hint">没有单独为某个环节指定配置时,统一使用这里的默认值。</p>
+    <div class="row">
+      <div>
+        <label>模型</label>
+        <input type="text" id="default_model" required placeholder="claude-sonnet-latest" />
+      </div>
+      <div>
+        <label>Base URL</label>
+        <input type="text" id="default_base_url" required placeholder="https://..." />
+      </div>
+      <div>
+        <label>API Key</label>
+        <input type="password" id="default_api_key" required autocomplete="off" />
+      </div>
+    </div>
+  </fieldset>
+
+  <details>
+    <summary>分环节模型配置(可选,为节省成本可给不同环节单独指定 model / base_url / API Key)</summary>
+    <div id="stage-rows"></div>
+  </details>
+
+  <button type="submit">开始生成</button>
+</form>
+
+<div id="checkpoint">
+  <h3>需要人工确认情节规划</h3>
+  <p id="checkpoint-prompt"></p>
+  <pre id="checkpoint-context"></pre>
+  <label>反馈(驳回时请说明理由)</label>
+  <textarea id="checkpoint-feedback"></textarea>
+  <button id="checkpoint-approve">通过</button>
+  <button id="checkpoint-reject">驳回</button>
+</div>
+
+<div class="log-header">
+  <h3>运行日志</h3>
+  <button type="button" id="download-log">下载运行日志(JSON)</button>
+  <button type="button" id="download-state">下载状态快照(essay_state.json)</button>
+</div>
+<div id="log"></div>
+
+<div id="result"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

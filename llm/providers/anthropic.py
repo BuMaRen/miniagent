@@ -108,6 +108,12 @@ def _to_chat_response(response: Any) -> ChatResponse:
     """把 Anthropic 的 Message 响应转成框架标准的 ChatResponse。"""
     content_text: list[str] = []
     tool_calls: list[ToolCall] = []
+    # thinking/redacted_thinking 等块目前不落进 content(不是本框架要的最终
+    # 输出),但真实消耗 usage.output_tokens——之前遇到"output_tokens 很大、
+    # 最终内容却很短甚至被截断"时完全无从下手,因为这些块被直接丢弃、不留
+    # 痕迹。这里把遇到的未知块类型记下来,合并进 usage 一起落盘(见
+    # llm/logging_client.py),排查时至少能看出多出来的 token 花在哪类块上。
+    unhandled_block_types: list[str] = []
     for block in response.content:
         if block.type == "text":
             content_text.append(block.text)
@@ -117,6 +123,8 @@ def _to_chat_response(response: Any) -> ChatResponse:
             tool_calls.append(
                 ToolCall(id=block.id, name=block.name, arguments=dict(block.input))
             )
+        else:
+            unhandled_block_types.append(block.type)
 
     message = Message(
         role="assistant",
@@ -125,10 +133,12 @@ def _to_chat_response(response: Any) -> ChatResponse:
     )
 
     usage = response.usage.model_dump() if response.usage else {}
+    if unhandled_block_types:
+        usage["_unhandled_content_block_types"] = unhandled_block_types
 
     return ChatResponse(
-        message=message, 
-        tool_calls=tool_calls, 
+        message=message,
+        tool_calls=tool_calls,
         usage=usage,
         stop_reason=response.stop_reason,
     )
