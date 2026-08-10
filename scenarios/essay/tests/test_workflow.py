@@ -42,7 +42,13 @@ DRAFT_VALUE = [{"index": 1, "title": "第一章", "content": "一二三四五", 
 META_VALUE = {
     "title": "重生后我惊艳全家",
     "blurb": "一段推广简介",
-    "tags": {"genre": ["婚姻家庭"], "identity": ["赘婿"], "hook": ["重生", "打脸"]},
+    "tags": {
+        "category": ["婚姻家庭"],
+        "plot": ["打脸逆袭"],
+        "character": ["霸总"],
+        "emotion": ["爽文"],
+        "setting": ["豪门世家"],
+    },
 }
 
 BRIEF_VALUE = {

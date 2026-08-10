@@ -56,7 +56,13 @@ class PathRoundTripTests(unittest.TestCase):
             {
                 "title": "标题",
                 "blurb": "简介",
-                "tags": {"genre": ["婚姻家庭"], "identity": ["赘婿"], "hook": ["重生"]},
+                "tags": {
+                    "category": ["婚姻家庭"],
+                    "plot": ["打脸逆袭"],
+                    "character": ["霸总"],
+                    "emotion": ["爽文"],
+                    "setting": ["豪门世家"],
+                },
             },
         )
         with self.assertRaises(SchemaError):

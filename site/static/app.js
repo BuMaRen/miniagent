@@ -6,6 +6,10 @@ const STAGES = [
   { id: "cover", label: "封面文案" },
 ];
 
+// 与 scenarios/essay/schemas/state.py 的 TAG_DIMENSIONS 保持一致(标签维度
+// 及展示顺序:主分类/情节/角色/情绪/背景)。
+const TAG_DIMENSIONS = ["category", "plot", "character", "emotion", "setting"];
+
 const form = document.getElementById("run-form");
 const logEl = document.getElementById("log");
 const resultEl = document.getElementById("result");
@@ -290,7 +294,7 @@ function storyTitle(data) {
 
 function storyTagWords(data) {
   const tags = (data.meta && data.meta.tags) || {};
-  return [...(tags.genre || []), ...(tags.identity || []), ...(tags.hook || [])];
+  return TAG_DIMENSIONS.flatMap((dim) => tags[dim] || []);
 }
 
 // 拼出和 landing.py 的 manuscript.md 差不多的纯文本,供"复制全文"用——不

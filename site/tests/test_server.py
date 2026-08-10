@@ -70,7 +70,13 @@ DRAFT_VALUE = [{"index": 1, "title": "第一章", "content": "文" * 6500, "word
 META_VALUE = {
     "title": "重生后我惊艳全家",
     "blurb": "一段推广简介",
-    "tags": {"genre": ["婚姻家庭"], "identity": ["赘婿"], "hook": ["重生", "打脸"]},
+    "tags": {
+        "category": ["婚姻家庭"],
+        "plot": ["打脸逆袭"],
+        "character": ["霸总"],
+        "emotion": ["爽文"],
+        "setting": ["豪门世家"],
+    },
 }
 
 
@@ -254,7 +260,7 @@ class CheckpointBridgeTests(ServerTestCase):
         self.assertEqual(result["cover_image"]["url"], "https://example.com/cover.png")
         self.assertFalse(result["needs_manual_review"])
         self.assertEqual(result["meta"]["title"], META_VALUE["title"])
-        self.assertEqual(result["meta"]["tags"]["hook"], ["重生", "打脸"])
+        self.assertEqual(result["meta"]["tags"]["plot"], ["打脸逆袭"])
 
     def test_events_stream_reports_stage_progress(self) -> None:
         server.run_workflow = _make_fake_run_workflow(planning_calls=1)

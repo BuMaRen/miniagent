@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from scenarios.essay.schemas.state import TAG_DIMENSIONS
+
 _STATE_KEY = "essay_state"
 
 
@@ -72,7 +74,7 @@ def _render_manuscript(
         lines.append(f"# {title}\n")
     if meta.get("blurb"):
         lines.append(f"> {meta['blurb']}\n")
-    tag_words = [*_get_tags(meta, "genre"), *_get_tags(meta, "identity"), *_get_tags(meta, "hook")]
+    tag_words = [word for dim in TAG_DIMENSIONS for word in _get_tags(meta, dim)]
     if tag_words:
         lines.append(f"标签:{' · '.join(tag_words)}\n")
     if cover_brief:
