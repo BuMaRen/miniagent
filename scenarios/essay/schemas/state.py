@@ -36,12 +36,23 @@ CHAPTER = {
 REVIEW = {
     "rejected": bool,
     "feedback": str,
-    "audience_feedback": str,
 }
 
 COVER_IMAGE = {
     "url": str,
     "note": str,
+}
+
+STORY_TAGS = {
+    "genre": [str],  # 故事类型:婚姻家庭、女生情感……
+    "identity": [str],  # 人物身份:赘婿、豪门千金……
+    "hook": [str],  # 爽点类型:重生、系统流……
+}
+
+STORY_META = {
+    "title": str,
+    "blurb": str,
+    "tags": STORY_TAGS,
 }
 
 _STATE_SCHEMA_NAME = "essay_state"
@@ -50,6 +61,7 @@ BRIEF_KEY = "brief"
 PLAN_KEY = "plan"
 DRAFT_KEY = "draft"
 REVIEW_KEY = "review"
+META_KEY = "meta"
 COVER_BRIEF_KEY = "cover_brief"
 COVER_IMAGE_KEY = "cover_image"
 
@@ -57,6 +69,7 @@ BRIEF_PATH = f"{_STATE_SCHEMA_NAME}.{BRIEF_KEY}"
 PLAN_PATH = f"{_STATE_SCHEMA_NAME}.{PLAN_KEY}"
 DRAFT_PATH = f"{_STATE_SCHEMA_NAME}.{DRAFT_KEY}"
 REVIEW_PATH = f"{_STATE_SCHEMA_NAME}.{REVIEW_KEY}"
+META_PATH = f"{_STATE_SCHEMA_NAME}.{META_KEY}"
 COVER_BRIEF_PATH = f"{_STATE_SCHEMA_NAME}.{COVER_BRIEF_KEY}"
 COVER_IMAGE_PATH = f"{_STATE_SCHEMA_NAME}.{COVER_IMAGE_KEY}"
 
@@ -74,6 +87,8 @@ REVIEW_OUTPUT_SCHEMA = StateSchema(
     },
 )
 
+META_OUTPUT_SCHEMA = StateSchema("meta_output", {META_PATH: STORY_META})
+
 COVER_BRIEF_OUTPUT_SCHEMA = StateSchema("cover_brief_output", {COVER_BRIEF_PATH: str})
 
 COVER_IMAGE_OUTPUT_SCHEMA = StateSchema("cover_image_output", {COVER_IMAGE_PATH: COVER_IMAGE})
@@ -89,6 +104,7 @@ ESSAY_STATE_SCHEMA = StateSchema(
             PLAN_KEY: PLAN,
             DRAFT_KEY: [CHAPTER],
             REVIEW_KEY: REVIEW,
+            META_KEY: STORY_META,
             COVER_BRIEF_KEY: str,
             COVER_IMAGE_KEY: COVER_IMAGE,
         }

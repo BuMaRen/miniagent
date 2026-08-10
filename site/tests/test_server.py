@@ -51,7 +51,7 @@ from llm.client import ChatResponse, LLMClient  # noqa: E402
 from llm.image_client import ImageClient, ImageResult  # noqa: E402
 from llm.message import Message  # noqa: E402
 from scenarios.essay.brief import parse_brief  # noqa: E402
-from scenarios.essay.schemas.state import BRIEF_PATH, DRAFT_PATH, PLAN_PATH, REVIEW_PATH, COVER_BRIEF_PATH, empty_state  # noqa: E402
+from scenarios.essay.schemas.state import BRIEF_PATH, DRAFT_PATH, META_PATH, PLAN_PATH, REVIEW_PATH, COVER_BRIEF_PATH, empty_state  # noqa: E402
 from scenarios.essay.workflow import build_workflow  # noqa: E402
 from scenarios.essay import landing  # noqa: E402
 from state.backends.json_file import JsonFileStateStore  # noqa: E402
@@ -67,6 +67,11 @@ PLAN_VALUE = {
 # brief 走真实的 parse_brief 校验(min_words 下限锁死 6000),正文长度必须
 # 落在 [6000, 20000] 区间内,否则 merge_rejection 会因为字数不达标一直打回。
 DRAFT_VALUE = [{"index": 1, "title": "第一章", "content": "文" * 6500, "word_count": 0}]
+META_VALUE = {
+    "title": "重生后我惊艳全家",
+    "blurb": "一段推广简介",
+    "tags": {"genre": ["婚姻家庭"], "identity": ["赘婿"], "hook": ["重生", "打脸"]},
+}
 
 
 class _ScriptedClient(LLMClient):
@@ -109,13 +114,15 @@ def _make_fake_run_workflow(planning_calls: int = 1):
         planning_client = _ScriptedClient([{PLAN_PATH: PLAN_VALUE}] * planning_calls)
         drafting_client = _ScriptedClient([{DRAFT_PATH: DRAFT_VALUE}])
         review_client = _ScriptedClient(
-            [{DRAFT_PATH: DRAFT_VALUE, REVIEW_PATH: {"rejected": False, "feedback": "", "audience_feedback": "好看"}}]
+            [{DRAFT_PATH: DRAFT_VALUE, REVIEW_PATH: {"rejected": False, "feedback": ""}}]
         )
+        meta_client = _ScriptedClient([{META_PATH: META_VALUE}])
         cover_client = _ScriptedClient([{COVER_BRIEF_PATH: "视觉描述"}])
         clients = {
             "planning": planning_client,
             "drafting": drafting_client,
             "review": review_client,
+            "meta": meta_client,
             "cover": cover_client,
         }
         workflow = build_workflow(
@@ -246,6 +253,8 @@ class CheckpointBridgeTests(ServerTestCase):
         self.assertEqual(result["plan"]["protagonist_name"], "卫知遥")
         self.assertEqual(result["cover_image"]["url"], "https://example.com/cover.png")
         self.assertFalse(result["needs_manual_review"])
+        self.assertEqual(result["meta"]["title"], META_VALUE["title"])
+        self.assertEqual(result["meta"]["tags"]["hook"], ["重生", "打脸"])
 
     def test_events_stream_reports_stage_progress(self) -> None:
         server.run_workflow = _make_fake_run_workflow(planning_calls=1)
@@ -260,6 +269,29 @@ class CheckpointBridgeTests(ServerTestCase):
 
         self.assertIn('"event": "stage_start"', body)
         self.assertIn('"event": "done"', body)
+        # 审核发现的问题(通过/打回+具体原因)要打进事件流,不能只有一句空壳的
+        # "[完成] review",不然用户在页面上看不出为什么会有改稿循环。
+        self.assertIn('"event": "review_result"', body)
+        self.assertIn('"rejected": false', body)
+
+    def test_review_result_event_reports_rejection_feedback(self) -> None:
+        # min_words 定得比 DRAFT_VALUE(6500 字)高,让首轮审核因为字数不达标
+        # 被系统判定打回,验证 review_result 事件真的带上了具体的驳回原因。
+        server.run_workflow = _make_fake_run_workflow(planning_calls=1)
+
+        _, data = self._post(
+            "/api/runs",
+            {"brief": self._brief(human_review=False, min_words=7000, max_words=20000), **self._credentials()},
+        )
+        run_id = data["run_id"]
+        self._wait_for_status(run_id, {"success", "failed", "terminated_rejected"})
+
+        with urllib.request.urlopen(self._url(f"/api/runs/{run_id}/events"), timeout=5) as resp:
+            body = resp.read().decode("utf-8")
+
+        self.assertIn('"event": "review_result"', body)
+        self.assertIn('"rejected": true', body)
+        self.assertIn("低于下限", body)
 
 
 class PlanningRejectedTests(ServerTestCase):
@@ -322,6 +354,29 @@ class DownloadRoutesTests(ServerTestCase):
     def test_state_404_for_unknown_run(self) -> None:
         status, _, _ = self._get_raw("/api/runs/does-not-exist/state")
         self.assertEqual(status, 404)
+
+
+class MonthlyTrendsRouteTests(ServerTestCase):
+    """GET /api/monthly-trends 直接把 trend.load_monthly_trend_options() 的
+    结果原样透出,供前端"月度热点"页签渲染可选方向列表。"""
+
+    def test_returns_parsed_options(self) -> None:
+        orig = server.load_monthly_trend_options
+        server.load_monthly_trend_options = lambda: [{"title": "t1", "description": "d1"}]
+        self.addCleanup(lambda: setattr(server, "load_monthly_trend_options", orig))
+
+        status, data = self._get("/api/monthly-trends")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["options"], [{"title": "t1", "description": "d1"}])
+
+    def test_returns_empty_list_when_no_trend_file(self) -> None:
+        orig = server.load_monthly_trend_options
+        server.load_monthly_trend_options = lambda: []
+        self.addCleanup(lambda: setattr(server, "load_monthly_trend_options", orig))
+
+        status, data = self._get("/api/monthly-trends")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["options"], [])
 
 
 class CreateRunValidationTests(ServerTestCase):

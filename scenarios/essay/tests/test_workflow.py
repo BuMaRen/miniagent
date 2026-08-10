@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest import mock
 
 from engine.context import CheckpointRequest, RunContext
 from llm.client import ChatResponse, LLMClient
@@ -21,6 +22,7 @@ from scenarios.essay.schemas.state import (
     COVER_BRIEF_PATH,
     COVER_IMAGE_PATH,
     DRAFT_PATH,
+    META_PATH,
     PLAN_PATH,
     REVIEW_PATH,
     empty_state,
@@ -36,6 +38,12 @@ PLAN_VALUE = {
 }
 
 DRAFT_VALUE = [{"index": 1, "title": "第一章", "content": "一二三四五", "word_count": 0}]
+
+META_VALUE = {
+    "title": "重生后我惊艳全家",
+    "blurb": "一段推广简介",
+    "tags": {"genre": ["婚姻家庭"], "identity": ["赘婿"], "hook": ["重生", "打脸"]},
+}
 
 BRIEF_VALUE = {
     "synopsis": "测试用简介",
@@ -89,13 +97,15 @@ class AcceptedOnFirstPassTests(unittest.TestCase):
         planning_client = ScriptedClient([{PLAN_PATH: PLAN_VALUE}])
         drafting_client = ScriptedClient([{DRAFT_PATH: DRAFT_VALUE}])
         review_client = ScriptedClient(
-            [{DRAFT_PATH: DRAFT_VALUE, REVIEW_PATH: {"rejected": False, "feedback": "", "audience_feedback": "好看"}}]
+            [{DRAFT_PATH: DRAFT_VALUE, REVIEW_PATH: {"rejected": False, "feedback": ""}}]
         )
+        meta_client = ScriptedClient([{META_PATH: META_VALUE}])
         cover_client = ScriptedClient([{COVER_BRIEF_PATH: "一段视觉描述"}])
         clients = {
             "planning": planning_client,
             "drafting": drafting_client,
             "review": review_client,
+            "meta": meta_client,
             "cover": cover_client,
         }
         image_client = FakeImageClient()
@@ -118,25 +128,34 @@ class AcceptedOnFirstPassTests(unittest.TestCase):
         # 完全没被调用;封面文案走独立的 cover client(不再复用 drafting)。
         self.assertEqual(drafting_client.calls, 1)
         self.assertEqual(review_client.calls, 1)
+        self.assertEqual(meta_client.calls, 1)
         self.assertEqual(cover_client.calls, 1)
         self.assertEqual(image_client.calls, 1)
 
         self.assertFalse(store.get(REVIEW_PATH)["rejected"])
         self.assertEqual(store.get(PLAN_PATH)["protagonist_name"], "武景年")
+        self.assertEqual(store.get(META_PATH)["title"], "重生后我惊艳全家")
         self.assertEqual(store.get(COVER_IMAGE_PATH)["url"], "https://example.com/cover.png")
 
     def test_cover_nodes_are_skipped_when_generate_cover_is_false(self) -> None:
         planning_client = ScriptedClient([{PLAN_PATH: PLAN_VALUE}])
         drafting_client = ScriptedClient([{DRAFT_PATH: DRAFT_VALUE}])
         review_client = ScriptedClient(
-            [{DRAFT_PATH: DRAFT_VALUE, REVIEW_PATH: {"rejected": False, "feedback": "", "audience_feedback": "好看"}}]
+            [{DRAFT_PATH: DRAFT_VALUE, REVIEW_PATH: {"rejected": False, "feedback": ""}}]
         )
+        meta_client = ScriptedClient([{META_PATH: META_VALUE}])
         image_client = FakeImageClient()
 
         # "cover" 故意不放进 clients:generate_cover=False 时 workflow 根本不该
         # 构造封面节点,client_factory 也就不该被以 "cover" 调用——如果调用了会
-        # 直接 KeyError 而不是被默默忽略。
-        clients = {"planning": planning_client, "drafting": drafting_client, "review": review_client}
+        # 直接 KeyError 而不是被默默忽略。meta 不受这个开关影响,始终要有,所以
+        # 要放进 clients(否则 workflow 跑到 meta 节点会直接 KeyError)。
+        clients = {
+            "planning": planning_client,
+            "drafting": drafting_client,
+            "review": review_client,
+            "meta": meta_client,
+        }
         workflow = build_workflow(
             client_factory=lambda stage_name, model=None: clients[stage_name],
             image_client=image_client,
@@ -150,35 +169,71 @@ class AcceptedOnFirstPassTests(unittest.TestCase):
 
         workflow.run(ctx, {})
 
+        self.assertEqual(meta_client.calls, 1)
         self.assertEqual(image_client.calls, 0)
         self.assertEqual(store.get(COVER_BRIEF_PATH), "")
         self.assertEqual(store.get(COVER_IMAGE_PATH), {"url": "", "note": ""})
 
 
+class PlanningMonthlyTrendTests(unittest.TestCase):
+    """规划节点应该把 trend.load_monthly_trend() 的结果注入模型输入,且每次
+    运行都重新读取(不是构建期固定死的值),这样运营方替换 monthly_trend.md
+    才能不改代码、不重启进程就生效。
+    """
+
+    def test_monthly_trend_is_injected_into_planning_input(self) -> None:
+        planning_client = ScriptedClient([{PLAN_PATH: PLAN_VALUE}])
+        drafting_client = ScriptedClient([{DRAFT_PATH: DRAFT_VALUE}])
+        review_client = ScriptedClient([{DRAFT_PATH: DRAFT_VALUE, REVIEW_PATH: {"rejected": False, "feedback": ""}}])
+        meta_client = ScriptedClient([{META_PATH: META_VALUE}])
+        clients = {
+            "planning": planning_client,
+            "drafting": drafting_client,
+            "review": review_client,
+            "meta": meta_client,
+        }
+        workflow = build_workflow(
+            client_factory=lambda stage_name, model=None: clients[stage_name],
+            image_client=FakeImageClient(),
+            human_review=False,
+            generate_cover=False,
+        )
+
+        store = InMemoryStateStore()
+        _seed_state(store, human_review=False, generate_cover=False)
+        ctx = RunContext(state=store)
+
+        with mock.patch("scenarios.essay.nodes.planning.load_monthly_trend", return_value="本月主打真假千金"):
+            workflow.run(ctx, {})
+
+        self.assertIn("本月主打真假千金", planning_client.received[0])
+
+
 class RedraftLoopTests(unittest.TestCase):
-    """第一次审核驳回,改稿一次后通过。"""
+    """第一次审核驳回(字数不达标),改稿一次后通过。
+
+    审核放宽后 AI 不再对情节/爆点做打回判断(rejected/feedback 恒为
+    False/""),打回只可能由系统的字数上下限判定触发,所以这里靠 brief 的
+    min_words 制造一次字数不足的驳回。
+    """
 
     def test_rejected_once_then_accepted(self) -> None:
         planning_client = ScriptedClient([{PLAN_PATH: PLAN_VALUE}])
-        redraft_output = [{"index": 1, "title": "第一章", "content": "改过的正文内容", "word_count": 0}]
+        redraft_output = [{"index": 1, "title": "第一章", "content": "改过的更长正文内容", "word_count": 0}]
         drafting_client = ScriptedClient([{DRAFT_PATH: DRAFT_VALUE}, {DRAFT_PATH: redraft_output}])
         review_client = ScriptedClient(
             [
-                {
-                    DRAFT_PATH: DRAFT_VALUE,
-                    REVIEW_PATH: {"rejected": True, "feedback": "情节跑偏了", "audience_feedback": "一般"},
-                },
-                {
-                    DRAFT_PATH: redraft_output,
-                    REVIEW_PATH: {"rejected": False, "feedback": "", "audience_feedback": "不错"},
-                },
+                {DRAFT_PATH: DRAFT_VALUE, REVIEW_PATH: {"rejected": False, "feedback": ""}},
+                {DRAFT_PATH: redraft_output, REVIEW_PATH: {"rejected": False, "feedback": ""}},
             ]
         )
+        meta_client = ScriptedClient([{META_PATH: META_VALUE}])
         cover_client = ScriptedClient([{COVER_BRIEF_PATH: "视觉描述"}])
         clients = {
             "planning": planning_client,
             "drafting": drafting_client,
             "review": review_client,
+            "meta": meta_client,
             "cover": cover_client,
         }
         image_client = FakeImageClient()
@@ -191,7 +246,8 @@ class RedraftLoopTests(unittest.TestCase):
         )
 
         store = InMemoryStateStore()
-        _seed_state(store, human_review=False)
+        # DRAFT_VALUE 的正文只有 5 个字,min_words=6 让首轮因字数不足被系统打回。
+        _seed_state(store, human_review=False, min_words=6)
         ctx = RunContext(state=store)
 
         workflow.run(ctx, {})
@@ -201,9 +257,9 @@ class RedraftLoopTests(unittest.TestCase):
         self.assertEqual(cover_client.calls, 1)
         # redraft 读到了上一轮审核驳回的反馈(REVIEW_PATH 是真实 state 路径,
         # 不需要走 loop 游标——见 nodes/drafting.py 的注释)。
-        self.assertIn("情节跑偏了", drafting_client.received[1])
+        self.assertIn("低于下限", drafting_client.received[1])
         self.assertFalse(store.get(REVIEW_PATH)["rejected"])
-        self.assertEqual(store.get(DRAFT_PATH)[0]["content"], "改过的正文内容")
+        self.assertEqual(store.get(DRAFT_PATH)[0]["content"], "改过的更长正文内容")
 
 
 class PlanningCheckpointTests(unittest.TestCase):
@@ -214,13 +270,15 @@ class PlanningCheckpointTests(unittest.TestCase):
         planning_client = ScriptedClient([{PLAN_PATH: PLAN_VALUE}, {PLAN_PATH: plan_v2}])
         drafting_client = ScriptedClient([{DRAFT_PATH: DRAFT_VALUE}])
         review_client = ScriptedClient(
-            [{DRAFT_PATH: DRAFT_VALUE, REVIEW_PATH: {"rejected": False, "feedback": "", "audience_feedback": "好看"}}]
+            [{DRAFT_PATH: DRAFT_VALUE, REVIEW_PATH: {"rejected": False, "feedback": ""}}]
         )
+        meta_client = ScriptedClient([{META_PATH: META_VALUE}])
         cover_client = ScriptedClient([{COVER_BRIEF_PATH: "视觉描述"}])
         clients = {
             "planning": planning_client,
             "drafting": drafting_client,
             "review": review_client,
+            "meta": meta_client,
             "cover": cover_client,
         }
         image_client = FakeImageClient()

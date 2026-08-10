@@ -6,6 +6,7 @@ from scenarios.essay.schemas.state import (
     COVER_IMAGE_PATH,
     DRAFT_PATH,
     ESSAY_STATE_SCHEMA,
+    META_PATH,
     PLAN_PATH,
     REVIEW_PATH,
     empty_state,
@@ -48,13 +49,21 @@ class PathRoundTripTests(unittest.TestCase):
         ESSAY_STATE_SCHEMA.validate(state)
 
     def test_validate_path_matches_declared_paths(self) -> None:
-        ESSAY_STATE_SCHEMA.validate_path(REVIEW_PATH, {"rejected": True, "feedback": "x", "audience_feedback": "y"})
+        ESSAY_STATE_SCHEMA.validate_path(REVIEW_PATH, {"rejected": True, "feedback": "x"})
         ESSAY_STATE_SCHEMA.validate_path(COVER_IMAGE_PATH, {"url": "u", "note": "n"})
+        ESSAY_STATE_SCHEMA.validate_path(
+            META_PATH,
+            {
+                "title": "标题",
+                "blurb": "简介",
+                "tags": {"genre": ["婚姻家庭"], "identity": ["赘婿"], "hook": ["重生"]},
+            },
+        )
         with self.assertRaises(SchemaError):
             ESSAY_STATE_SCHEMA.validate_path(REVIEW_PATH, {"rejected": "not a bool"})
 
     def test_paths_share_the_expected_top_level_name(self) -> None:
-        for path in (BRIEF_PATH, PLAN_PATH, DRAFT_PATH, REVIEW_PATH, COVER_IMAGE_PATH):
+        for path in (BRIEF_PATH, PLAN_PATH, DRAFT_PATH, REVIEW_PATH, META_PATH, COVER_IMAGE_PATH):
             self.assertTrue(path.startswith("essay_state."))
 
 

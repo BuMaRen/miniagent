@@ -12,8 +12,8 @@
   .row { display: flex; gap: 1rem; }
   .row > div { flex: 1; }
   button, a.btn { margin-top: 1rem; padding: 0.5rem 1.2rem; cursor: pointer; display: inline-block; }
-  a.btn { text-decoration: none; border: 1px solid #888; border-radius: 4px; color: inherit; background: #f0f0f0; }
-  a.btn:hover { background: #e0e0e0; }
+  a.btn, button.btn { text-decoration: none; border: 1px solid #888; border-radius: 4px; color: inherit; background: #f0f0f0; font: inherit; }
+  a.btn:hover, button.btn:hover { background: #e0e0e0; }
   .log-header { display: flex; align-items: center; gap: 0.8rem; }
   .log-header button { margin-top: 0; padding: 0.3rem 0.8rem; font-size: 0.85rem; }
   #log { background: #111; color: #ddd; padding: 0.8rem; height: 240px; overflow-y: auto; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; }
@@ -27,14 +27,42 @@
   .hint { font-weight: 400; font-size: 0.85rem; color: #666; }
   fieldset.required { border: 1px solid #c0392b; }
   fieldset.required legend { color: #c0392b; font-weight: 600; }
+  .mode-tabs { display: flex; gap: 0.4rem; border-bottom: 1px solid #ccc; margin-top: 0.6rem; }
+  .mode-tab { padding: 0.5rem 1rem; cursor: pointer; border: 1px solid #ccc; border-bottom: none; border-radius: 4px 4px 0 0; background: #f0f0f0; font-weight: 600; }
+  .mode-tab.active { background: #fff; border-bottom: 1px solid #fff; margin-bottom: -1px; }
+  .mode-panel { border: 1px solid #ccc; border-top: none; padding: 0.8rem; }
+  .mode-panel[hidden] { display: none; }
+  .trend-option { display: flex; gap: 0.6rem; align-items: flex-start; border: 1px solid #ddd; border-radius: 4px; padding: 0.6rem; margin-top: 0.5rem; cursor: pointer; }
+  .trend-option:hover { background: #f7f7f7; }
+  .trend-option input { margin-top: 0.2rem; }
+  .trend-option .trend-title { font-weight: 600; }
+  .trend-option .trend-desc { font-size: 0.85rem; color: #555; margin-top: 0.2rem; white-space: pre-wrap; }
+  #trend-empty-hint { display: none; }
+  #result .blurb { color: #444; font-style: italic; }
+  #result .tags { margin-top: -0.4rem; }
+  .tag-pill { display: inline-block; background: #eef4ff; color: #2456a8; border: 1px solid #cddcf5; border-radius: 999px; padding: 0.15rem 0.7rem; margin: 0 0.4rem 0.4rem 0; font-size: 0.85rem; }
 </style>
 </head>
 <body>
 <h1>短篇小说生产工作流</h1>
 
 <form id="run-form">
-  <label>简介(剧情/设定,必填)</label>
-  <textarea id="synopsis" required placeholder="用户 prompt,可能是剧情简介和一些设定杂糅在一起"></textarea>
+  <label>故事来源(必选其一)</label>
+  <div class="mode-tabs">
+    <div class="mode-tab active" data-mode="synopsis">自定义梗概</div>
+    <div class="mode-tab" data-mode="trend">月度热点</div>
+  </div>
+
+  <div id="mode-panel-synopsis" class="mode-panel">
+    <label>简介(剧情/设定)</label>
+    <textarea id="synopsis" placeholder="用户 prompt,可能是剧情简介和一些设定杂糅在一起"></textarea>
+  </div>
+
+  <div id="mode-panel-trend" class="mode-panel" hidden>
+    <p class="hint">选择一个平台本月推荐的热门方向,工作流会据此设计并生成完整故事。</p>
+    <div id="trend-options"></div>
+    <p id="trend-empty-hint" class="hint">本月暂无热点方向数据(monthly_trend.md 为空),请先切换到"自定义梗概"。</p>
+  </div>
 
   <div class="row">
     <div>

@@ -7,6 +7,7 @@ from llm.client import LLMClient
 from llm.image_client import ImageClient
 from scenarios.essay.nodes.cover import build_cover_brief_node, build_cover_image_node
 from scenarios.essay.nodes.drafting import build_first_draft_node, build_redraft_node
+from scenarios.essay.nodes.meta import build_meta_node
 from scenarios.essay.nodes.planning import PLANNING_CHECKPOINT_LOOP_NAME, build_planning_node
 from scenarios.essay.nodes.review import build_review_node
 from scenarios.essay.schemas.state import APPROVAL_SCHEMA, ESSAY_STATE_SCHEMA, REVIEW_PATH
@@ -64,7 +65,9 @@ def build_workflow(
                         brief.human_review,由调用方在构建期决定,不在运行期读)。
         generate_cover: 是否生成封面(对应 brief.generate_cover)。封面是可选
                         功能——不是每个故事都需要,关掉时直接不接这两个节点,
-                        不产生任何额外的模型调用。
+                        不产生任何额外的模型调用。标题/简介/分类标签
+                        (meta 节点)不受这个开关影响,始终执行——它们是
+                        每篇产出都要有的展示信息,不是可选功能。
 
     Returns:
         Workflow: 短篇小说生产工作流。
@@ -100,6 +103,7 @@ def build_workflow(
                 ),
             ],
         ),
+        build_meta_node(client=client_factory("meta", None)),
     ]
 
     if generate_cover:

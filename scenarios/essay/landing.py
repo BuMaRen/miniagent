@@ -28,13 +28,14 @@ def write(snapshot: dict[str, Any], output_dir: Path) -> dict[str, Any]:
     plan = essay.get("plan", {}) or {}
     draft = essay.get("draft", []) or []
     review = essay.get("review", {}) or {}
+    meta = essay.get("meta", {}) or {}
     cover_brief = essay.get("cover_brief", "") or ""
     cover_image = essay.get("cover_image", {}) or {}
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     manuscript_path = output_dir / "manuscript.md"
-    manuscript_path.write_text(_render_manuscript(plan, draft, cover_brief), encoding="utf-8")
+    manuscript_path.write_text(_render_manuscript(plan, draft, cover_brief, meta), encoding="utf-8")
 
     total_words = sum(chapter.get("word_count", 0) for chapter in draft)
     # rejected 为 true 说明 redraft_loop 跑满 max_iterations 仍未通过审核
@@ -46,6 +47,7 @@ def write(snapshot: dict[str, Any], output_dir: Path) -> dict[str, Any]:
         "total_words": total_words,
         "review": review,
         "needs_manual_review": bool(review.get("rejected", False)),
+        "meta": meta,
         "cover_brief": cover_brief,
         "cover_image": cover_image,
     }
@@ -58,15 +60,29 @@ def write(snapshot: dict[str, Any], output_dir: Path) -> dict[str, Any]:
     return result
 
 
-def _render_manuscript(plan: dict[str, Any], draft: list[dict[str, Any]], cover_brief: str) -> str:
+def _render_manuscript(
+    plan: dict[str, Any], draft: list[dict[str, Any]], cover_brief: str, meta: dict[str, Any]
+) -> str:
     lines: list[str] = []
-    protagonist = plan.get("protagonist_name", "")
-    if protagonist:
-        lines.append(f"# {protagonist}的故事\n")
+    # meta.title 是 meta 节点专门产出的标题,比"XX的故事"这种占位标题更贴合
+    # 全篇实际看点;meta 节点始终执行,只有异常场景(如中途失败续跑到别的
+    # 节点就失败了)才会缺失,这时退回旧的占位标题兜底。
+    title = meta.get("title") or (f"{plan.get('protagonist_name', '')}的故事" if plan.get("protagonist_name") else "")
+    if title:
+        lines.append(f"# {title}\n")
+    if meta.get("blurb"):
+        lines.append(f"> {meta['blurb']}\n")
+    tag_words = [*_get_tags(meta, "genre"), *_get_tags(meta, "identity"), *_get_tags(meta, "hook")]
+    if tag_words:
+        lines.append(f"标签:{' · '.join(tag_words)}\n")
     if cover_brief:
         lines.append(f"> 封面文案:{cover_brief}\n")
     for chapter in sorted(draft, key=lambda c: c.get("index", 0)):
-        title = chapter.get("title") or f"第 {chapter.get('index', '?')} 章"
-        lines.append(f"## {title}\n")
+        chapter_title = chapter.get("title") or f"第 {chapter.get('index', '?')} 章"
+        lines.append(f"## {chapter_title}\n")
         lines.append(chapter.get("content", "") + "\n")
     return "\n".join(lines)
+
+
+def _get_tags(meta: dict[str, Any], dimension: str) -> list[str]:
+    return (meta.get("tags") or {}).get(dimension) or []

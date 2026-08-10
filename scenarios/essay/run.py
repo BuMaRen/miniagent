@@ -42,7 +42,7 @@ from state.backends.json_file import JsonFileStateStore
 from scenarios.essay import landing
 from scenarios.essay.brief import parse_brief
 from scenarios.essay.nodes.planning import PLANNING_CHECKPOINT_LOOP_NAME
-from scenarios.essay.schemas.state import BRIEF_PATH, empty_state
+from scenarios.essay.schemas.state import BRIEF_PATH, REVIEW_PATH, empty_state
 from scenarios.essay.workflow import ClientFactory, build_workflow
 
 DEFAULT_OUTPUT_DIR = Path(__file__).with_name("output")
@@ -60,8 +60,9 @@ _PROVIDER_BASE_URL_ENV = {
 ApiKeyFor = Callable[[str], "str | None"]
 
 # 场景支持的 client_factory stage_name 集合(前端详解:情节规划/正文编撰/
-# 审核各自独立选 model;封面是可选环节,同样独立配置,不再复用"正文编撰"的)。
-STAGE_NAMES = ("planning", "drafting", "review", "cover")
+# 审核各自独立选 model;meta(标题/简介/标签)始终执行,封面是可选环节,
+# 两者都同样独立配置,不复用"正文编撰"的)。
+STAGE_NAMES = ("planning", "drafting", "review", "meta", "cover")
 
 
 @dataclass(frozen=True)
@@ -317,6 +318,18 @@ def run_workflow(
 # ---------------------------------------------------------------------------
 
 
+def _print_after_stage(name: str, outputs: dict[str, Any]) -> None:
+    print(f"[stage:done]  {name}")
+    if name == "review":
+        # 打出审核发现的问题(字数是否达标、AI 修正错别字后的驳回结论),不然
+        # CLI 只能看到一行空壳的 "[stage:done] review",不知道这一轮通过没有。
+        review = outputs.get(REVIEW_PATH) or {}
+        if review.get("rejected"):
+            print(f"[review] 打回: {review.get('feedback', '')}")
+        else:
+            print("[review] 通过")
+
+
 def cli_checkpoint_handler(request: CheckpointRequest) -> dict[str, Any]:
     print(f"\n[checkpoint:{request.name}] {request.prompt or ''}")
     if request.context:
@@ -374,7 +387,7 @@ def main() -> None:
             checkpoint_handler=cli_checkpoint_handler if human_review else None,
             hooks=LifecycleHooks(
                 before_stage=lambda name, _inputs: print(f"[stage:start] {name}"),
-                after_stage=lambda name, _outputs: print(f"[stage:done]  {name}"),
+                after_stage=_print_after_stage,
                 before_loop_iteration=lambda name, i: print(f"[loop] {name} 第 {i + 1} 轮"),
                 on_checkpoint=lambda name: print(f"[checkpoint] {name}"),
             ),

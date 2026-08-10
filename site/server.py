@@ -48,6 +48,8 @@ from scenarios.essay.run import (  # noqa: E402
     StageCredentials,
     run_workflow,
 )
+from scenarios.essay.schemas.state import REVIEW_PATH  # noqa: E402
+from scenarios.essay.trend import load_monthly_trend_options  # noqa: E402
 
 STATIC_DIR = Path(__file__).with_name("static")
 RUNS_DIR = Path(__file__).with_name("runs")
@@ -153,10 +155,27 @@ def _make_checkpoint_handler(run: RunState):
     return handler
 
 
+def _after_stage(run: RunState, name: str, outputs: dict[str, Any]) -> None:
+    _emit(run, {"event": "stage_done", "name": name})
+    if name == "review":
+        # 把审核发现的问题(字数是否达标、AI 修正错别字后的驳回结论)直接打
+        # 到运行日志里,不然用户只能看到"[完成] review"这种空壳事件,不知道
+        # 这一轮到底通过没通过、为什么被打回。
+        review = outputs.get(REVIEW_PATH) or {}
+        _emit(
+            run,
+            {
+                "event": "review_result",
+                "rejected": bool(review.get("rejected", False)),
+                "feedback": review.get("feedback", ""),
+            },
+        )
+
+
 def _make_hooks(run: RunState) -> LifecycleHooks:
     return LifecycleHooks(
         before_stage=lambda name, _inputs: _emit(run, {"event": "stage_start", "name": name}),
-        after_stage=lambda name, _outputs: _emit(run, {"event": "stage_done", "name": name}),
+        after_stage=lambda name, outputs: _after_stage(run, name, outputs),
         before_loop_iteration=lambda name, i: _emit(
             run, {"event": "loop_iteration", "name": name, "iteration": i + 1}
         ),
@@ -254,6 +273,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path in STATIC_FILES:
             self._serve_static(path)
+            return
+        if path == "/api/monthly-trends":
+            self._send_json(HTTPStatus.OK, {"options": load_monthly_trend_options()})
             return
         match = _RUN_GET_RE.match(path)
         if match:
