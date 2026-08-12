@@ -77,6 +77,8 @@ def _render_manuscript(
     tag_words = [word for dim in TAG_DIMENSIONS for word in _get_tags(meta, dim)]
     if tag_words:
         lines.append(f"标签:{' · '.join(tag_words)}\n")
+    if meta.get("preview_ratio"):
+        lines.append(f"建议试读比例:{meta['preview_ratio']:.0%}(超过此比例需看广告解锁)\n")
     if cover_brief:
         lines.append(f"> 封面文案:{cover_brief}\n")
     for chapter in sorted(draft, key=lambda c: c.get("index", 0)):

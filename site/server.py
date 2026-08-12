@@ -60,7 +60,11 @@ STATE_FILENAME = "essay_state.json"
 # 排查"内容被截断"这类只看最终产物猜不出原因的问题(见 llm/logging_client.py)。
 LOG_CHATS = False
 
-TERMINAL_STATUSES = {"success", "failed", "terminated_rejected"}
+# interrupted:进程重启前没跑完、又没法确认真的是异常失败(见
+# _rebuild_run_from_disk)的历史任务专用状态,和 failed 区分开——不是代码
+# 抛了异常,只是服务器重启把这个 run 的后台线程连同它的 checkpoint_ready
+# Event 一起带走了,httpserver 不支持跨进程续跑,只能标成终态。
+TERMINAL_STATUSES = {"success", "failed", "terminated_rejected", "interrupted"}
 
 STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -70,6 +74,36 @@ STATIC_FILES = {
 
 _RUN_GET_RE = re.compile(r"^/api/runs/([^/]+)/(status|events|result|download|state)$")
 _RUN_CHECKPOINT_RE = re.compile(r"^/api/runs/([^/]+)/checkpoint$")
+
+# 前端任务栏用这份固定顺序渲染每个任务下面的阶段小圆点(见 index.html/app.js
+# 的任务栏说明)。first_draft/redraft 都算"drafting"阶段、cover_brief/
+# cover_image 都算"cover"阶段——阶段点是给用户看的粗粒度进度,不需要精确到
+# Stage 级别;改稿循环可能让 drafting/review 反复触发,但阶段点只关心"这个
+# 阶段有没有开始过/是否已经交棒给下一个阶段",不逐轮细分。
+PHASE_STAGE_MAP = {
+    "planning": "planning",
+    "first_draft": "drafting",
+    "redraft": "drafting",
+    "review": "review",
+    "meta": "meta",
+    "cover_brief": "cover",
+    "cover_image": "cover",
+}
+
+
+def _phase_order_for(brief: dict[str, Any]) -> list[str]:
+    order = ["planning", "drafting", "review", "meta"]
+    if brief.get("generate_cover"):
+        order.append("cover")
+    return order
+
+
+def _title_from_synopsis(synopsis: str) -> str:
+    # meta 节点跑完之前(甚至跑到一半就失败)都还没有正式标题,先用简介的
+    # 开头顶一下,好歹能在任务栏里认出是哪个任务;跑成功之后 _run_thread 会
+    # 用 meta.title 覆盖掉这个占位值。
+    synopsis = (synopsis or "").strip()
+    return synopsis if len(synopsis) <= 24 else synopsis[:24] + "…"
 
 
 class HttpError(Exception):
@@ -88,7 +122,16 @@ class HttpError(Exception):
 class RunState:
     run_id: str
     run_dir: Path
-    status: str = "running"  # running | awaiting_checkpoint | success | failed | terminated_rejected
+    brief: dict[str, Any] = field(default_factory=dict)
+    title: str = ""
+    created_at: float = field(default_factory=time.time)
+    # phase_order 是这次 run 实际会经过的阶段(取决于 brief.generate_cover),
+    # phases 是每个阶段当前的进度:pending(还没开始) | active(进行中) |
+    # done(已完成) | error(run 在这个阶段失败/终止时结束的)。任务栏的阶段
+    # 小圆点直接按这两份数据渲染,见 _track_phase/_finalize_phases。
+    phase_order: list[str] = field(default_factory=list)
+    phases: dict[str, str] = field(default_factory=dict)
+    status: str = "running"  # running | awaiting_checkpoint | success | failed | terminated_rejected | interrupted
     events: list[dict[str, Any]] = field(default_factory=list)
     pending_checkpoint: dict[str, Any] | None = None
     checkpoint_answer: dict[str, Any] | None = None
@@ -101,6 +144,105 @@ class RunState:
 
 RUNS: dict[str, RunState] = {}
 RUNS_LOCK = threading.Lock()
+
+
+def _created_at_from_run_id(run_id: str) -> float:
+    """run_id 的前 15 个字符是创建时刻的 "%Y%m%d_%H%M%S"(见 _handle_create_run
+    生成 run_id 的写法),从磁盘重建 RunState 时没有别的地方能拿到真实创建
+    时间——状态文件的 mtime 是"最后一次落盘时间",进度越多的 run 反而越晚,
+    会把任务栏的先后顺序搞乱,不能用。解析不出来时兜底成 0(排最前面)。
+    """
+    try:
+        return time.mktime(time.strptime(run_id[:15], "%Y%m%d_%H%M%S"))
+    except ValueError:
+        return 0.0
+
+
+def _rebuild_run_from_disk(run_dir: Path) -> RunState | None:
+    """把一个 run 目录重新挂载成任务栏能看到的只读记录(不会真的续跑,见
+    RunState.status 里 "interrupted" 的说明)。
+
+    只依赖 essay_state.json(run_workflow 一开始 load(empty_state()) +
+    patch(BRIEF_PATH, brief) 就已经落过盘,只要线程真正跑起来过就一定有)和
+    output/story.json(landing.write() 产出,只有整个工作流跑完才会写)这两
+    份东西,都是每个 run 目录里本来就会写的文件,不需要额外持久化任何状态。
+    """
+    state_path = run_dir / STATE_FILENAME
+    if not state_path.is_file():
+        return None  # 目录存在但状态文件都没有,创建请求大概率没真正跑起来
+    try:
+        snapshot = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    essay = snapshot.get("essay_state") or {}
+    brief = essay.get("brief") or {}
+    if not brief.get("synopsis"):
+        return None
+
+    run_id = run_dir.name
+    phase_order = _phase_order_for(brief)
+    created_at = _created_at_from_run_id(run_id)
+    meta = essay.get("meta") or {}
+    title = meta.get("title") or _title_from_synopsis(brief.get("synopsis", ""))
+
+    story_path = run_dir / "output" / "story.json"
+    if story_path.is_file():
+        try:
+            result = json.loads(story_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            result = None
+        if result is not None:
+            return RunState(
+                run_id=run_id,
+                run_dir=run_dir,
+                brief=brief,
+                title=(result.get("meta") or {}).get("title") or title,
+                created_at=created_at,
+                phase_order=phase_order,
+                phases={phase: "done" for phase in phase_order},
+                status="success",
+                result=result,
+            )
+
+    # 没有 story.json:工作流没跑完服务器就重启了。阶段进度按状态快照里已经
+    # 写了哪些字段做个粗略估计——不追求精确(比如没法区分"review 通过了"和
+    # "review 从没跑过",干脆按"有没有正文"一并处理),反正这个 run 已经跑
+    # 不动了,阶段点只是给用户一个大致印象,不是精确的进度条。
+    draft = essay.get("draft") or []
+    reached = {
+        "planning": bool((essay.get("plan") or {}).get("protagonist_name")),
+        "drafting": bool(draft),
+        "review": bool(draft),
+        "meta": bool(meta.get("title")),
+        "cover": bool(essay.get("cover_brief")) or bool((essay.get("cover_image") or {}).get("url")),
+    }
+    phases = {phase: ("done" if reached.get(phase) else "pending") for phase in phase_order}
+
+    return RunState(
+        run_id=run_id,
+        run_dir=run_dir,
+        brief=brief,
+        title=title,
+        created_at=created_at,
+        phase_order=phase_order,
+        phases=phases,
+        status="interrupted",
+        error="服务器重启导致该任务被中断,无法继续;如需要请重新提交一次。",
+    )
+
+
+def _load_runs_from_disk() -> None:
+    """启动时调用一次,把 RUNS_DIR 下遗留的 run 目录重新挂载进 RUNS,这样
+    任务栏在服务器重启后依旧能看到历史任务(至少是已经成功产出的那些,
+    还能下载/复制;没跑完的会标成 interrupted,不会假装还在跑)。"""
+    if not RUNS_DIR.is_dir():
+        return
+    for run_dir in sorted(RUNS_DIR.iterdir()):
+        if not run_dir.is_dir():
+            continue
+        run = _rebuild_run_from_disk(run_dir)
+        if run is not None:
+            RUNS[run.run_id] = run
 
 
 def _credentials_from_body(raw: Any, *, field_name: str) -> StageCredentials:
@@ -133,6 +275,40 @@ def _emit(run: RunState, event: dict[str, Any]) -> None:
     with run.lock:
         run.events.append(event)
     run.new_event.set()
+
+
+def _track_phase(run: RunState, stage_name: str) -> None:
+    """按 Stage 的 before_stage 事件推进任务栏的阶段小圆点。
+
+    看到某个阶段的 Stage 开始时,把它之前的阶段一律标记 done(哪怕是因为
+    Breaker 短路、from 没有真正跑过 review 就直接进了 meta 这种情况——
+    "之前的阶段"这个粒度不关心具体细节,只是给用户一个大致进度感),自己
+    标记 active。
+    """
+    phase = PHASE_STAGE_MAP.get(stage_name)
+    if phase is None:
+        return
+    with run.lock:
+        if phase not in run.phases:
+            return
+        idx = run.phase_order.index(phase)
+        for earlier in run.phase_order[:idx]:
+            if run.phases[earlier] != "done":
+                run.phases[earlier] = "done"
+        run.phases[phase] = "active"
+
+
+def _finalize_phases(run: RunState, status: str) -> None:
+    """run 跑到终态时收尾阶段小圆点:成功则全部标 done;失败/终止则把当时
+    正在进行的那个阶段标成 error,其余保持之前的状态不动。"""
+    with run.lock:
+        if status == "success":
+            for phase in run.phase_order:
+                run.phases[phase] = "done"
+        else:
+            for phase in run.phase_order:
+                if run.phases[phase] == "active":
+                    run.phases[phase] = "error"
 
 
 def _make_checkpoint_handler(run: RunState):
@@ -172,9 +348,14 @@ def _after_stage(run: RunState, name: str, outputs: dict[str, Any]) -> None:
         )
 
 
+def _before_stage(run: RunState, name: str) -> None:
+    _track_phase(run, name)
+    _emit(run, {"event": "stage_start", "name": name})
+
+
 def _make_hooks(run: RunState) -> LifecycleHooks:
     return LifecycleHooks(
-        before_stage=lambda name, _inputs: _emit(run, {"event": "stage_start", "name": name}),
+        before_stage=lambda name, _inputs: _before_stage(run, name),
         after_stage=lambda name, outputs: _after_stage(run, name, outputs),
         before_loop_iteration=lambda name, i: _emit(
             run, {"event": "loop_iteration", "name": name, "iteration": i + 1}
@@ -184,7 +365,7 @@ def _make_hooks(run: RunState) -> LifecycleHooks:
 
 def _run_thread(
     run: RunState,
-    brief_raw: dict[str, Any],
+    brief: dict[str, Any],
     default_credentials: StageCredentials,
     stage_credentials: dict[str, StageCredentials],
 ) -> None:
@@ -193,7 +374,7 @@ def _run_thread(
     log_dir = (run.run_dir / "log") if LOG_CHATS else None
     try:
         result = run_workflow(
-            brief_raw,
+            brief,
             output_dir=output_dir,
             state_path=state_path,
             default_credentials=default_credentials,
@@ -210,16 +391,25 @@ def _run_thread(
         with run.lock:
             run.status = "success"
             run.result = result
+            # meta 节点这时已经跑完了,用它产出的正式标题替换掉创建时用
+            # synopsis 顶的占位标题——任务栏要显示的是"这篇小说叫什么",
+            # 不是简介的前 24 个字。
+            meta_title = ((result or {}).get("meta") or {}).get("title")
+            if meta_title:
+                run.title = meta_title
+        _finalize_phases(run, "success")
         _emit(run, {"event": "done", "status": "success"})
     except PlanningRejectedError as err:
         with run.lock:
             run.status = "terminated_rejected"
             run.error = str(err)
+        _finalize_phases(run, "terminated_rejected")
         _emit(run, {"event": "done", "status": "terminated_rejected", "message": str(err)})
     except Exception as err:  # noqa: BLE001 —— 后台线程的兜底,不能让异常静默丢失
         with run.lock:
             run.status = "failed"
             run.error = repr(err)
+        _finalize_phases(run, "failed")
         _emit(run, {"event": "done", "status": "failed", "message": repr(err)})
 
 
@@ -277,6 +467,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/monthly-trends":
             self._send_json(HTTPStatus.OK, {"options": load_monthly_trend_options()})
             return
+        if path == "/api/runs":
+            self._send_json(HTTPStatus.OK, {"runs": _list_runs_payload()})
+            return
         match = _RUN_GET_RE.match(path)
         if match:
             run_id, action = match.groups()
@@ -326,7 +519,10 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(brief_raw, dict):
             raise HttpError(HTTPStatus.BAD_REQUEST, "brief 必须是一个对象")
         try:
-            parse_brief(brief_raw)  # 提前校验,写错的简介立刻在提交时报错。
+            # 校验通过后拿到补全默认值的规范化 brief——既传给 run_workflow
+            # (它内部会再校验一遍,parse_brief 是幂等的,无害),也存进
+            # RunState 供任务栏/任务详情展示用(不含任何 model/API Key)。
+            brief = parse_brief(brief_raw)
         except ValueError as err:
             raise HttpError(HTTPStatus.BAD_REQUEST, str(err)) from err
 
@@ -348,13 +544,21 @@ class Handler(BaseHTTPRequestHandler):
         }
 
         run_id = time.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
-        run = RunState(run_id=run_id, run_dir=RUNS_DIR / run_id)
+        phase_order = _phase_order_for(brief)
+        run = RunState(
+            run_id=run_id,
+            run_dir=RUNS_DIR / run_id,
+            brief=brief,
+            title=_title_from_synopsis(brief["synopsis"]),
+            phase_order=phase_order,
+            phases={phase: "pending" for phase in phase_order},
+        )
         with RUNS_LOCK:
             RUNS[run_id] = run
 
         thread = threading.Thread(
             target=_run_thread,
-            args=(run, brief_raw, default_credentials, stage_credentials),
+            args=(run, brief, default_credentials, stage_credentials),
             daemon=True,
         )
         thread.start()
@@ -448,11 +652,40 @@ class Handler(BaseHTTPRequestHandler):
 
 def _status_payload(run: RunState) -> dict[str, Any]:
     with run.lock:
-        payload: dict[str, Any] = {"run_id": run.run_id, "status": run.status}
+        payload: dict[str, Any] = {
+            "run_id": run.run_id,
+            "status": run.status,
+            "title": run.title,
+            "brief": run.brief,
+            "phase_order": list(run.phase_order),
+            "phases": dict(run.phases),
+        }
         if run.pending_checkpoint:
             payload["checkpoint"] = run.pending_checkpoint
         if run.error:
             payload["error"] = run.error
+    return payload
+
+
+def _list_runs_payload() -> list[dict[str, Any]]:
+    """任务栏轮盘用的轻量列表:不带 brief(点开某个任务时再用 /status 单独
+    取详情),只给球体渲染需要的最少信息,按创建时间升序排列。"""
+    with RUNS_LOCK:
+        runs = list(RUNS.values())
+    runs.sort(key=lambda r: r.created_at)
+    payload = []
+    for run in runs:
+        with run.lock:
+            payload.append(
+                {
+                    "run_id": run.run_id,
+                    "status": run.status,
+                    "title": run.title,
+                    "created_at": run.created_at,
+                    "phase_order": list(run.phase_order),
+                    "phases": dict(run.phases),
+                }
+            )
     return payload
 
 
@@ -471,8 +704,9 @@ def main() -> None:
     LOG_CHATS = args.log_chats
 
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    _load_runs_from_disk()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"essay httpserver listening on http://{args.host}:{args.port}")
+    print(f"essay httpserver listening on http://{args.host}:{args.port} ({len(RUNS)} 个历史任务已重新挂载)")
     httpd.serve_forever()
 
 

@@ -8,6 +8,14 @@ from scenarios.essay.nodes.common import make_agent
 from scenarios.essay.schemas.state import DRAFT_PATH, META_OUTPUT_SCHEMA, META_PATH, PLAN_PATH
 from scenarios.essay.tags import load_tag_taxonomy
 
+# preview_ratio 该取多少是个叙事判断(悬念/爆点落在哪),没法像字数上下限
+# 那样用代码算出正确答案(development-guide.md §9);这里只做一层防御性夹
+# 逼——万一模型偶尔给出 0、负数或者大于 1 这种明显没法用的值,不能让它原样
+# 流到前端(百分比显示会直接崩)或平台的广告解锁逻辑里,但正常范围内的值
+# 完全尊重模型的判断,不做"帮它改成更合理的数字"这种事。
+_PREVIEW_RATIO_MIN = 0.02
+_PREVIEW_RATIO_MAX = 0.6
+
 
 def _meta_executor(agent) -> Any:
     def _run(ctx: RunContext, inputs: dict) -> dict:
@@ -16,7 +24,11 @@ def _meta_executor(agent) -> Any:
         # 生效,不需要经过 reads/StateStore(与 planning 节点注入
         # monthly_trend 的方式一致,见 nodes/planning.py)。
         inputs["tag_taxonomy"] = load_tag_taxonomy()
-        return agent.run(ctx, inputs)
+        outputs = agent.run(ctx, inputs)
+        meta = outputs.get(META_PATH)
+        if isinstance(meta, dict) and isinstance(meta.get("preview_ratio"), (int, float)):
+            meta["preview_ratio"] = max(_PREVIEW_RATIO_MIN, min(_PREVIEW_RATIO_MAX, meta["preview_ratio"]))
+        return outputs
 
     return _run
 

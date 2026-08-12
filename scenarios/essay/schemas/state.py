@@ -59,6 +59,10 @@ STORY_META = {
     "title": str,
     "blurb": str,
     "tags": STORY_TAGS,
+    # 平台的广告解锁机制:超过这个比例的正文需要看广告才能继续读。0~1 之间
+    # 的小数,由 AI 按情节爆点/悬念节奏判断,不是代码能算出来的值(不像字数
+    # 上下限那样是硬性数字判定)——见 prompts.py 的 META_FIELD_GUIDE。
+    "preview_ratio": float,
 }
 
 _STATE_SCHEMA_NAME = "essay_state"

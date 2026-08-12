@@ -63,6 +63,7 @@ class PathRoundTripTests(unittest.TestCase):
                     "emotion": ["爽文"],
                     "setting": ["豪门世家"],
                 },
+                "preview_ratio": 0.18,
             },
         )
         with self.assertRaises(SchemaError):

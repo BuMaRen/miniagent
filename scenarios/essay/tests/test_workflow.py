@@ -49,6 +49,7 @@ META_VALUE = {
         "emotion": ["爽文"],
         "setting": ["豪门世家"],
     },
+    "preview_ratio": 0.18,
 }
 
 BRIEF_VALUE = {
@@ -213,6 +214,45 @@ class PlanningMonthlyTrendTests(unittest.TestCase):
             workflow.run(ctx, {})
 
         self.assertIn("本月主打真假千金", planning_client.received[0])
+
+
+class MetaPreviewRatioTests(unittest.TestCase):
+    """preview_ratio 是叙事判断,代码不重新计算它,但要防御性夹逼到
+    [0.02, 0.6] 区间(见 nodes/meta.py),不能让模型偶尔给出的离谱值原样
+    流到 state 里。"""
+
+    def _run_with_preview_ratio(self, raw_ratio: float) -> float:
+        planning_client = ScriptedClient([{PLAN_PATH: PLAN_VALUE}])
+        drafting_client = ScriptedClient([{DRAFT_PATH: DRAFT_VALUE}])
+        review_client = ScriptedClient([{DRAFT_PATH: DRAFT_VALUE, REVIEW_PATH: {"rejected": False, "feedback": ""}}])
+        meta_client = ScriptedClient([{META_PATH: {**META_VALUE, "preview_ratio": raw_ratio}}])
+        clients = {
+            "planning": planning_client,
+            "drafting": drafting_client,
+            "review": review_client,
+            "meta": meta_client,
+        }
+        workflow = build_workflow(
+            client_factory=lambda stage_name, model=None: clients[stage_name],
+            image_client=FakeImageClient(),
+            human_review=False,
+            generate_cover=False,
+        )
+
+        store = InMemoryStateStore()
+        _seed_state(store, human_review=False, generate_cover=False)
+        ctx = RunContext(state=store)
+        workflow.run(ctx, {})
+        return store.get(META_PATH)["preview_ratio"]
+
+    def test_within_range_value_is_kept_as_is(self) -> None:
+        self.assertEqual(self._run_with_preview_ratio(0.25), 0.25)
+
+    def test_value_above_one_is_clamped_to_max(self) -> None:
+        self.assertEqual(self._run_with_preview_ratio(1.5), 0.6)
+
+    def test_negative_value_is_clamped_to_min(self) -> None:
+        self.assertEqual(self._run_with_preview_ratio(-0.3), 0.02)
 
 
 class RedraftLoopTests(unittest.TestCase):

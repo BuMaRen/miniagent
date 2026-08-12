@@ -77,6 +77,7 @@ META_VALUE = {
         "emotion": ["爽文"],
         "setting": ["豪门世家"],
     },
+    "preview_ratio": 0.18,
 }
 
 
@@ -317,6 +318,197 @@ class PlanningRejectedTests(ServerTestCase):
         status, result = self._get(f"/api/runs/{run_id}/result")
         self.assertEqual(status, 200)
         self.assertEqual(result["status"], "terminated_rejected")
+
+
+class TaskListAndPhaseTests(ServerTestCase):
+    """GET /api/runs(任务栏列表)与 /status 里新增的 title/brief/phase_order/
+    phases 字段——驱动前端任务栏轮盘的球体高亮与阶段小圆点。"""
+
+    def test_runs_list_reports_active_phase_during_checkpoint_wait(self) -> None:
+        server.run_workflow = _make_fake_run_workflow(planning_calls=1)
+
+        _, data = self._post("/api/runs", {"brief": self._brief(human_review=True), **self._credentials()})
+        run_id = data["run_id"]
+        self._wait_for_status(run_id, {"awaiting_checkpoint"})
+
+        status, payload = self._get("/api/runs")
+        self.assertEqual(status, 200)
+        entries = {r["run_id"]: r for r in payload["runs"]}
+        self.assertIn(run_id, entries)
+        entry = entries[run_id]
+        self.assertEqual(entry["status"], "awaiting_checkpoint")
+        self.assertEqual(entry["phase_order"], ["planning", "drafting", "review", "meta", "cover"])
+        # planning 的 Stage 本身已经跑完,但 Checkpoint 还没通过——阶段小圆点
+        # 停在 active,不能提前标 done(万一被驳回还要再跑一轮 planning)。
+        self.assertEqual(entry["phases"]["planning"], "active")
+        self.assertEqual(entry["phases"]["drafting"], "pending")
+
+        self._post(f"/api/runs/{run_id}/checkpoint", {"approved": True, "feedback": ""})
+        self._wait_for_status(run_id, {"success", "failed", "terminated_rejected"})
+
+    def test_all_phases_done_after_success(self) -> None:
+        server.run_workflow = _make_fake_run_workflow(planning_calls=1)
+
+        _, data = self._post("/api/runs", {"brief": self._brief(human_review=False), **self._credentials()})
+        run_id = data["run_id"]
+        self._wait_for_status(run_id, {"success", "failed", "terminated_rejected"})
+
+        status, payload = self._get("/api/runs")
+        entry = next(r for r in payload["runs"] if r["run_id"] == run_id)
+        self.assertEqual(entry["status"], "success")
+        self.assertTrue(all(v == "done" for v in entry["phases"].values()), entry["phases"])
+
+    def test_generate_cover_false_excludes_cover_phase(self) -> None:
+        server.run_workflow = _make_fake_run_workflow(planning_calls=1)
+
+        _, data = self._post(
+            "/api/runs",
+            {"brief": self._brief(human_review=False, generate_cover=False), **self._credentials()},
+        )
+        run_id = data["run_id"]
+        self._wait_for_status(run_id, {"success", "failed", "terminated_rejected"})
+
+        status, payload = self._get(f"/api/runs/{run_id}/status")
+        self.assertEqual(status, 200)
+        self.assertNotIn("cover", payload["phase_order"])
+        self.assertNotIn("cover", payload["phases"])
+
+    def test_status_endpoint_exposes_brief_and_meta_title(self) -> None:
+        server.run_workflow = _make_fake_run_workflow(planning_calls=1)
+
+        _, data = self._post("/api/runs", {"brief": self._brief(human_review=False), **self._credentials()})
+        run_id = data["run_id"]
+        self._wait_for_status(run_id, {"success", "failed", "terminated_rejected"})
+
+        status, payload = self._get(f"/api/runs/{run_id}/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["brief"]["synopsis"], self._brief()["synopsis"])
+        # meta 节点跑完之后,任务标题应该被替换成 meta.title,不再是创建时用
+        # 简介顶的占位标题。
+        self.assertEqual(payload["title"], META_VALUE["title"])
+
+
+class DiskReconstructionTests(ServerTestCase):
+    """服务器重启后,site/server.py 启动时会调用 _load_runs_from_disk() 重新
+    扫描 RUNS_DIR、把历史任务挂回 RUNS,这里直接调用这个函数验证(不需要真的
+    重启进程/重新 import 一次模块)。"""
+
+    def _parsed_brief(self, **overrides) -> dict:
+        base = {
+            "synopsis": "一个测试用简介",
+            "min_words": 6000,
+            "max_words": 20000,
+            "category": "",
+            "audience": "",
+            "human_review": False,
+            "cover_prompt": "",
+            "generate_cover": True,
+        }
+        base.update(overrides)
+        return base
+
+    def _write_state_file(self, run_dir: Path, essay_state: dict) -> None:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / server.STATE_FILENAME).write_text(
+            json.dumps({"essay_state": essay_state}, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def test_rebuilds_successful_run_from_story_json(self) -> None:
+        run_id = "20200101_000000_aaaaaa"  # 固定的过去时间戳,不会和其它测试真正生成的 run_id 撞
+        run_dir = server.RUNS_DIR / run_id
+        self.addCleanup(lambda: server.RUNS.pop(run_id, None))
+
+        self._write_state_file(
+            run_dir,
+            {
+                "brief": self._parsed_brief(),
+                "plan": PLAN_VALUE,
+                "draft": DRAFT_VALUE,
+                "review": {"rejected": False, "feedback": ""},
+                "meta": META_VALUE,
+                "cover_brief": "视觉描述",
+                "cover_image": {"url": "https://example.com/cover.png", "note": ""},
+            },
+        )
+        story = {
+            "plan": PLAN_VALUE,
+            "chapters": DRAFT_VALUE,
+            "total_words": 6500,
+            "review": {"rejected": False, "feedback": ""},
+            "needs_manual_review": False,
+            "meta": META_VALUE,
+            "cover_brief": "视觉描述",
+            "cover_image": {"url": "https://example.com/cover.png", "note": ""},
+            "manuscript_path": str(run_dir / "output" / "manuscript.md"),
+            "story_path": str(run_dir / "output" / "story.json"),
+        }
+        (run_dir / "output").mkdir(parents=True, exist_ok=True)
+        (run_dir / "output" / "manuscript.md").write_text("# 正文\n", encoding="utf-8")
+        (run_dir / "output" / "story.json").write_text(json.dumps(story, ensure_ascii=False), encoding="utf-8")
+
+        server._load_runs_from_disk()
+
+        status, payload = self._get("/api/runs")
+        self.assertEqual(status, 200)
+        entries = {r["run_id"]: r for r in payload["runs"]}
+        self.assertIn(run_id, entries)
+        self.assertEqual(entries[run_id]["status"], "success")
+        self.assertEqual(entries[run_id]["title"], META_VALUE["title"])
+        self.assertTrue(all(v == "done" for v in entries[run_id]["phases"].values()), entries[run_id]["phases"])
+
+        status, result = self._get(f"/api/runs/{run_id}/result")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["meta"]["title"], META_VALUE["title"])
+
+        # 重建出来的 success run 也能正常下载正文——manuscript_path 指向的
+        # 文件是重建之前(“上一辈子”)就已经落在磁盘上的,不需要重新生成。
+        status, body, headers = self._get_raw(f"/api/runs/{run_id}/download")
+        self.assertEqual(status, 200)
+        self.assertIn("正文", body.decode("utf-8"))
+
+    def test_rebuilds_interrupted_run_without_story_json(self) -> None:
+        run_id = "20200101_000000_bbbbbb"
+        run_dir = server.RUNS_DIR / run_id
+        self.addCleanup(lambda: server.RUNS.pop(run_id, None))
+
+        empty_tags = {"category": [], "plot": [], "character": [], "emotion": [], "setting": []}
+        self._write_state_file(
+            run_dir,
+            {
+                "brief": self._parsed_brief(),
+                "plan": PLAN_VALUE,  # planning 阶段跑完了
+                "draft": [],  # 但还没写出正文——卡在 drafting 之前/中途
+                "review": {"rejected": False, "feedback": ""},
+                "meta": {"title": "", "blurb": "", "tags": empty_tags},
+                "cover_brief": "",
+                "cover_image": {"url": "", "note": ""},
+            },
+        )
+        # 故意不写 output/story.json:模拟"进程在跑完之前就被杀掉了"。
+
+        server._load_runs_from_disk()
+
+        status, payload = self._get("/api/runs")
+        self.assertEqual(status, 200)
+        entries = {r["run_id"]: r for r in payload["runs"]}
+        self.assertIn(run_id, entries)
+        self.assertEqual(entries[run_id]["status"], "interrupted")
+        self.assertEqual(entries[run_id]["phases"]["planning"], "done")
+        self.assertEqual(entries[run_id]["phases"]["drafting"], "pending")
+
+        status, result = self._get(f"/api/runs/{run_id}/result")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "interrupted")
+        self.assertIn("重启", result["error"])
+
+    def test_ignores_run_directory_without_state_file(self) -> None:
+        run_id = "20200101_000000_cccccc"
+        run_dir = server.RUNS_DIR / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)  # 空目录,essay_state.json 都没有
+
+        server._load_runs_from_disk()
+
+        self.assertNotIn(run_id, server.RUNS)
 
 
 class DownloadRoutesTests(ServerTestCase):

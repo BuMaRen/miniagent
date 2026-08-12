@@ -4,7 +4,8 @@
 <meta charset="utf-8" />
 <title>短篇小说生产工作流</title>
 <style>
-  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; line-height: 1.5; margin: 0; }
   fieldset { margin-bottom: 1rem; }
   label { display: block; margin-top: 0.6rem; font-weight: 600; }
   textarea, input[type=text], input[type=number], input[type=password] { width: 100%; box-sizing: border-box; padding: 0.4rem; margin-top: 0.2rem; }
@@ -41,98 +42,169 @@
   #result .blurb { color: #444; font-style: italic; }
   #result .tags { margin-top: -0.4rem; }
   .tag-pill { display: inline-block; background: #eef4ff; color: #2456a8; border: 1px solid #cddcf5; border-radius: 999px; padding: 0.15rem 0.7rem; margin: 0 0.4rem 0.4rem 0; font-size: 0.85rem; }
+
+  /* -------- 左侧任务栏("轮盘"式任务列表,见 app.js 的详细说明) -------- */
+  #app-shell { display: flex; align-items: stretch; min-height: 100vh; }
+  #task-rail { flex: 0 0 84px; width: 84px; display: flex; flex-direction: column; align-items: center; background: #f7f8fa; border-right: 1px solid #e0e0e0; position: sticky; top: 0; height: 100vh; }
+  #task-rail-new { margin: 1.1rem 0 0.4rem; }
+  #task-rail-scroll { flex: 1; width: 100%; overflow-y: auto; scroll-behavior: smooth; }
+  #task-rail-list { display: flex; flex-direction: column; align-items: center; }
+  .task-ball { display: flex; flex-direction: column; align-items: center; padding: 8px 0; cursor: pointer; transition: opacity 0.15s ease, transform 0.15s ease; }
+  .ball-row { position: relative; display: flex; align-items: center; justify-content: center; }
+  .ball-circle { width: 20px; height: 20px; border-radius: 50%; background: #ccc; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: #fff; line-height: 1; user-select: none; }
+  .task-ball.status-running .ball-circle,
+  .task-ball.status-awaiting_checkpoint .ball-circle { background: #f5a623; animation: dot-pulse 1.4s ease-in-out infinite; }
+  .task-ball.status-success .ball-circle { background: #2ecc71; }
+  .task-ball.status-failed .ball-circle,
+  .task-ball.status-terminated_rejected .ball-circle { background: #e74c3c; }
+  /* interrupted:服务器重启导致没跑完的历史任务,不是代码报错,用中性灰
+     和红色的 failed 区分开。 */
+  .task-ball.status-interrupted .ball-circle { background: #999; }
+  .task-ball.centered .ball-circle { outline: 2px solid #2456a8; outline-offset: 2px; }
+  .task-ball.selected .ball-circle { background: #2456a8 !important; }
+  /* 任务名称标签:position:fixed 独立于任务栏之外(见 app.js 的
+     updateFloatingLabel),不然放在 .task-ball 内部会被 #task-rail-scroll
+     的纵向滚动裁剪掉横向溢出的部分(CSS 的 overflow-x/overflow-y 只要有
+     一个不是 visible,另一个也会被强制按裁剪处理,没法只滚纵向、横向完全
+     不裁)。默认(选中但未悬停)只露出前几个字、右侧用 mask 渐隐淡出;
+     鼠标悬停对应的球时(.expanded)展开显示完整名称。 */
+  #floating-ball-label { position: fixed; display: none; transform: translateY(-50%); background: #2456a8; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 0.78rem; white-space: nowrap; box-shadow: 0 1px 4px rgba(0,0,0,0.25); z-index: 50; pointer-events: none; max-width: 3.2em; overflow: hidden; -webkit-mask-image: linear-gradient(to right, #000 60%, transparent 100%); mask-image: linear-gradient(to right, #000 60%, transparent 100%); transition: max-width 0.15s ease; }
+  #floating-ball-label.expanded { max-width: 60vw; -webkit-mask-image: none; mask-image: none; }
+  .phase-dots { display: flex; gap: 3px; margin-top: 4px; }
+  .phase-dot { width: 5px; height: 5px; border-radius: 50%; background: #fff; border: 1px solid #bbb; }
+  .phase-dot.phase-active { background: #2456a8; border-color: #2456a8; animation: dot-pulse 1.2s ease-in-out infinite; }
+  .phase-dot.phase-done { background: #2ecc71; border-color: #2ecc71; }
+  .phase-dot.phase-error { background: #e74c3c; border-color: #e74c3c; }
+  @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .new-ball .ball-circle { width: 26px; height: 26px; border: 2px dashed #999; background: #fff; display: flex; align-items: center; justify-content: center; font-size: 17px; font-weight: 700; color: #777; }
+  .new-ball.selected .ball-circle { background: #2456a8 !important; border-style: solid; border-color: #2456a8; color: #fff; }
+
+  #main-area { flex: 1; min-width: 0; }
+  /* 左侧 padding 特意留得比其它三边大:任务名称标签(#floating-ball-label)
+     默认(未展开)最多伸到球右边约 3.2em + 内边距,给它留出一块不会压到正文
+     文字的空白缓冲区,不然球贴着正文时标签会直接叠在文字上面,很突兀。 */
+  #main-inner { max-width: 860px; margin: 2rem auto; padding: 0 1.2rem 3rem 3.6rem; }
+  #view-task[hidden], #view-create[hidden] { display: none; }
+  #task-config p { margin: 0.3rem 0; }
+  #create-error { display: none; }
 </style>
 </head>
 <body>
-<h1>短篇小说生产工作流</h1>
-
-<form id="run-form">
-  <label>故事来源(必选其一)</label>
-  <div class="mode-tabs">
-    <div class="mode-tab active" data-mode="synopsis">自定义梗概</div>
-    <div class="mode-tab" data-mode="trend">月度热点</div>
-  </div>
-
-  <div id="mode-panel-synopsis" class="mode-panel">
-    <label>简介(剧情/设定)</label>
-    <textarea id="synopsis" placeholder="用户 prompt,可能是剧情简介和一些设定杂糅在一起"></textarea>
-  </div>
-
-  <div id="mode-panel-trend" class="mode-panel" hidden>
-    <p class="hint">选择一个平台本月推荐的热门方向,工作流会据此设计并生成完整故事。</p>
-    <div id="trend-options"></div>
-    <p id="trend-empty-hint" class="hint">本月暂无热点方向数据(monthly_trend.md 为空),请先切换到"自定义梗概"。</p>
-  </div>
-
-  <div class="row">
-    <div>
-      <label>字数下限(&ge; 6000)</label>
-      <input type="number" id="min_words" value="6000" min="6000" max="20000" />
+<div id="app-shell">
+  <aside id="task-rail">
+    <div id="task-rail-new" class="task-ball new-ball selected" title="新建任务">
+      <div class="ball-row"><div class="ball-circle">+</div></div>
     </div>
-    <div>
-      <label>字数上限(&le; 20000)</label>
-      <input type="number" id="max_words" value="12000" min="6000" max="20000" />
+    <div id="task-rail-scroll">
+      <div id="task-rail-list"></div>
     </div>
-  </div>
+  </aside>
 
-  <label><input type="checkbox" id="human_review" /> 情节规划完成后需要人工审核(最多返工 2 次,超过则任务终止)</label>
-  <label><input type="checkbox" id="generate_cover" /> 生成封面(可选,不勾选则跳过封面文案/图像两个节点,省一次模型调用)</label>
+  <main id="main-area">
+    <div id="main-inner">
+      <h1>短篇小说生产工作流</h1>
 
-  <details>
-    <summary>高级选项</summary>
-    <label>类别(可选)</label>
-    <input type="text" id="category" />
-    <label>受众(可选,留空由 AI 推断)</label>
-    <input type="text" id="audience" />
-    <label id="cover-prompt-label">封面要求(可选,仅在勾选"生成封面"时生效)</label>
-    <textarea id="cover_prompt" placeholder="留空则由 AI 按受众自行设计"></textarea>
-  </details>
+      <section id="view-create">
+        <p id="create-error" class="terminated"></p>
+        <form id="run-form">
+          <label>故事来源(必选其一)</label>
+          <div class="mode-tabs">
+            <div class="mode-tab active" data-mode="synopsis">自定义梗概</div>
+            <div class="mode-tab" data-mode="trend">月度热点</div>
+          </div>
 
-  <fieldset class="required">
-    <legend>默认模型配置(必填)</legend>
-    <p class="hint">没有单独为某个环节指定配置时,统一使用这里的默认值。</p>
-    <div class="row">
-      <div>
-        <label>模型</label>
-        <input type="text" id="default_model" required placeholder="claude-sonnet-latest" />
-      </div>
-      <div>
-        <label>Base URL</label>
-        <input type="text" id="default_base_url" required placeholder="https://..." />
-      </div>
-      <div>
-        <label>API Key</label>
-        <input type="password" id="default_api_key" required autocomplete="off" />
-      </div>
+          <div id="mode-panel-synopsis" class="mode-panel">
+            <label>简介(剧情/设定)</label>
+            <textarea id="synopsis" placeholder="用户 prompt,可能是剧情简介和一些设定杂糅在一起"></textarea>
+          </div>
+
+          <div id="mode-panel-trend" class="mode-panel" hidden>
+            <p class="hint">选择一个平台本月推荐的热门方向,工作流会据此设计并生成完整故事。</p>
+            <div id="trend-options"></div>
+            <p id="trend-empty-hint" class="hint">本月暂无热点方向数据(monthly_trend.md 为空),请先切换到"自定义梗概"。</p>
+          </div>
+
+          <div class="row">
+            <div>
+              <label>字数下限(&ge; 6000)</label>
+              <input type="number" id="min_words" value="6000" min="6000" max="20000" />
+            </div>
+            <div>
+              <label>字数上限(&le; 20000)</label>
+              <input type="number" id="max_words" value="12000" min="6000" max="20000" />
+            </div>
+          </div>
+
+          <label><input type="checkbox" id="human_review" /> 情节规划完成后需要人工审核(最多返工 2 次,超过则任务终止)</label>
+          <label><input type="checkbox" id="generate_cover" /> 生成封面(可选,不勾选则跳过封面文案/图像两个节点,省一次模型调用)</label>
+
+          <details>
+            <summary>高级选项</summary>
+            <label>类别(可选)</label>
+            <input type="text" id="category" />
+            <label>受众(可选,留空由 AI 推断)</label>
+            <input type="text" id="audience" />
+            <label id="cover-prompt-label">封面要求(可选,仅在勾选"生成封面"时生效)</label>
+            <textarea id="cover_prompt" placeholder="留空则由 AI 按受众自行设计"></textarea>
+          </details>
+
+          <fieldset class="required">
+            <legend>默认模型配置(API Key 必填)</legend>
+            <p class="hint">没有单独为某个环节指定配置时,统一使用这里的默认值。模型/Base URL
+              留空则使用灰色占位的默认值(gpt-5.6-luna / OpenRouter),按需可以自行覆盖。</p>
+            <div class="row">
+              <div>
+                <label>模型</label>
+                <input type="text" id="default_model" placeholder="gpt-5.6-luna" />
+              </div>
+              <div>
+                <label>Base URL</label>
+                <input type="text" id="default_base_url" placeholder="https://openrouter.ai/api/v1" />
+              </div>
+              <div>
+                <label>API Key</label>
+                <input type="password" id="default_api_key" required autocomplete="off" />
+              </div>
+            </div>
+          </fieldset>
+
+          <details>
+            <summary>分环节模型配置(可选,为节省成本可给不同环节单独指定 model / base_url / API Key)</summary>
+            <div id="stage-rows"></div>
+          </details>
+
+          <button type="submit">开始生成</button>
+        </form>
+      </section>
+
+      <section id="view-task" hidden>
+        <h2 id="task-title"></h2>
+        <div id="task-config"></div>
+
+        <div id="checkpoint">
+          <h3>需要人工确认情节规划</h3>
+          <p id="checkpoint-prompt"></p>
+          <pre id="checkpoint-context"></pre>
+          <label>反馈(驳回时请说明理由)</label>
+          <textarea id="checkpoint-feedback"></textarea>
+          <button id="checkpoint-approve">通过</button>
+          <button id="checkpoint-reject">驳回</button>
+        </div>
+
+        <div class="log-header">
+          <h3>运行日志</h3>
+          <button type="button" id="download-log">下载运行日志(JSON)</button>
+          <button type="button" id="download-state">下载状态快照(essay_state.json)</button>
+        </div>
+        <div id="log"></div>
+
+        <div id="result"></div>
+      </section>
     </div>
-  </fieldset>
-
-  <details>
-    <summary>分环节模型配置(可选,为节省成本可给不同环节单独指定 model / base_url / API Key)</summary>
-    <div id="stage-rows"></div>
-  </details>
-
-  <button type="submit">开始生成</button>
-</form>
-
-<div id="checkpoint">
-  <h3>需要人工确认情节规划</h3>
-  <p id="checkpoint-prompt"></p>
-  <pre id="checkpoint-context"></pre>
-  <label>反馈(驳回时请说明理由)</label>
-  <textarea id="checkpoint-feedback"></textarea>
-  <button id="checkpoint-approve">通过</button>
-  <button id="checkpoint-reject">驳回</button>
+  </main>
 </div>
 
-<div class="log-header">
-  <h3>运行日志</h3>
-  <button type="button" id="download-log">下载运行日志(JSON)</button>
-  <button type="button" id="download-state">下载状态快照(essay_state.json)</button>
-</div>
-<div id="log"></div>
-
-<div id="result"></div>
+<div id="floating-ball-label"></div>
 
 <script src="/app.js"></script>
 </body>
