@@ -193,7 +193,7 @@ def build_workflow(client_factory: ClientFactory, requirement_doc: str, output_p
 
 ```python
 # schemas/state.py
-from state.schema import OneOf, StateSchema
+from bumaren_agent_workflow.state.schema import OneOf, StateSchema
 
 TEST_CASE = {
     "id": str,
@@ -263,7 +263,7 @@ Stage(
 ### Sequence —— 顺序
 
 ```python
-from engine.primitives.sequence import Sequence
+from bumaren_agent_workflow.engine.primitives.sequence import Sequence
 Sequence(name="setup", nodes=[stage_a, stage_b])
 ```
 上一个节点的 `outputs` 直接作为下一个的 `inputs`。没有特殊行为。
@@ -271,9 +271,9 @@ Sequence(name="setup", nodes=[stage_a, stage_b])
 ### Loop —— 反复跑同一份输入,由 Continuer/Breaker 决定停不停
 
 ```python
-from engine.primitives.loop import Loop, OnExceed
-from engine.primitives.continuer import Continuer
-from engine.primitives.breaker import Breaker
+from bumaren_agent_workflow.engine.primitives.loop import Loop, OnExceed
+from bumaren_agent_workflow.engine.primitives.continuer import Continuer
+from bumaren_agent_workflow.engine.primitives.breaker import Breaker
 
 Loop(
     name="redraft_loop",
@@ -316,7 +316,7 @@ Loop(
 ### ForEach —— 遍历一个列表
 
 ```python
-from engine.primitives.foreach import ForEach
+from bumaren_agent_workflow.engine.primitives.foreach import ForEach
 
 ForEach(
     name="section_loop",
@@ -336,7 +336,7 @@ ForEach(
 ### Checkpoint —— 人工断点
 
 ```python
-from engine.primitives.checkpoint import Checkpoint
+from bumaren_agent_workflow.engine.primitives.checkpoint import Checkpoint
 
 Checkpoint(
     name="confirm_outline",

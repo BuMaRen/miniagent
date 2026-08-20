@@ -1,12 +1,12 @@
 import unittest
 
 try:
-    from llm.providers.openai import _build_response_format, _to_openai_message
+    from bumaren_agent_workflow.llm.providers.openai import _build_response_format, _to_openai_message
     _IMPORT_ERROR = None
 except ImportError as e:  # pragma: no cover - depends on optional dependency
     _IMPORT_ERROR = e
 
-from llm.message import Message, ToolCall
+from bumaren_agent_workflow.llm.message import Message, ToolCall
 
 
 @unittest.skipIf(_IMPORT_ERROR is not None, f"openai package not installed: {_IMPORT_ERROR}")

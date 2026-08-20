@@ -1,9 +1,9 @@
 import unittest
 
-from llm.message import ToolCall
-from tools.executor import ToolExecutor
-from tools.registry import ToolRegistry
-from tools.schema import schema_from_func
+from bumaren_agent_workflow.llm.message import ToolCall
+from bumaren_agent_workflow.tools.executor import ToolExecutor
+from bumaren_agent_workflow.tools.registry import ToolRegistry
+from bumaren_agent_workflow.tools.schema import schema_from_func
 
 
 def add(a: int, b: int) -> int:

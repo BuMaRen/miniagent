@@ -1,13 +1,13 @@
 import json
 import unittest
 
-from agent.agent import Agent
-from agent.memory import ConversationMemory
-from agent.toolset import ToolSet
-from llm.client import ChatResponse, LLMClient
-from llm.message import Message, ToolCall
-from state.schema import StateSchema
-from tools.registry import ToolRegistry
+from bumaren_agent_workflow.agent.agent import Agent
+from bumaren_agent_workflow.agent.memory import ConversationMemory
+from bumaren_agent_workflow.agent.toolset import ToolSet
+from bumaren_agent_workflow.llm.client import ChatResponse, LLMClient
+from bumaren_agent_workflow.llm.message import Message, ToolCall
+from bumaren_agent_workflow.state.schema import StateSchema
+from bumaren_agent_workflow.tools.registry import ToolRegistry
 
 
 class ScriptedLLMClient(LLMClient):

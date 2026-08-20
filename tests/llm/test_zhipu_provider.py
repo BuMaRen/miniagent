@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock
 
 try:
-    from llm.providers.zhipu import (
+    from bumaren_agent_workflow.llm.providers.zhipu import (
         ZhipuClient,
         _append_schema_instruction,
         _build_response_format,
@@ -12,7 +12,7 @@ try:
 except ImportError as e:  # pragma: no cover - depends on optional dependency
     _IMPORT_ERROR = e
 
-from llm.message import Message, ToolCall
+from bumaren_agent_workflow.llm.message import Message, ToolCall
 
 
 @unittest.skipIf(_IMPORT_ERROR is not None, f"zai-sdk package not installed: {_IMPORT_ERROR}")

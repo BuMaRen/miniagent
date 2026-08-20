@@ -1,7 +1,7 @@
 import unittest
 
-from llm.client import ChatResponse
-from llm.message import Message, ToolCall
+from bumaren_agent_workflow.llm.client import ChatResponse
+from bumaren_agent_workflow.llm.message import Message, ToolCall
 
 
 class MessageTests(unittest.TestCase):

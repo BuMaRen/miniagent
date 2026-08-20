@@ -34,7 +34,8 @@ Repository = "https://github.com/BuMaRen/miniagent"
 Issues = "https://github.com/BuMaRen/miniagent/issues"
 
 [tool.setuptools.packages.find]
-include = ["agent*", "engine*", "llm*", "state*", "tools*"]
+where = ["src"]
+include = ["bumaren_agent_workflow*"]
 
 [tool.setuptools_scm]
 version_scheme = "no-guess-dev"

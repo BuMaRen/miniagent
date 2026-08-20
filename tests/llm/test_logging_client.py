@@ -3,9 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from llm.client import ChatResponse, LLMClient, StreamEvent
-from llm.logging_client import LoggingLLMClient
-from llm.message import Message, ToolCall
+from bumaren_agent_workflow.llm.client import ChatResponse, LLMClient, StreamEvent
+from bumaren_agent_workflow.llm.logging_client import LoggingLLMClient
+from bumaren_agent_workflow.llm.message import Message, ToolCall
 
 
 class ScriptedLLMClient(LLMClient):

@@ -1,8 +1,8 @@
 import unittest
 
-from engine.context import RunContext
-from engine.primitives.continuer import Continuer, LoopContinue
-from state.backends.memory import InMemoryStateStore
+from bumaren_agent_workflow.engine.context import RunContext
+from bumaren_agent_workflow.engine.primitives.continuer import Continuer, LoopContinue
+from bumaren_agent_workflow.state.backends.memory import InMemoryStateStore
 
 
 def _ctx(**kwargs):

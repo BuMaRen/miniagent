@@ -1,9 +1,9 @@
 import unittest
 
-from engine.context import LifecycleHooks, RunContext
-from engine.stage import Stage
-from state.backends.memory import InMemoryStateStore
-from state.schema import SchemaError, StateSchema
+from bumaren_agent_workflow.engine.context import LifecycleHooks, RunContext
+from bumaren_agent_workflow.engine.stage import Stage
+from bumaren_agent_workflow.state.backends.memory import InMemoryStateStore
+from bumaren_agent_workflow.state.schema import SchemaError, StateSchema
 
 
 class StageRunTests(unittest.TestCase):

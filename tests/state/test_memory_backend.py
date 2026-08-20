@@ -1,7 +1,7 @@
 import unittest
 
-from state.backends.memory import InMemoryStateStore
-from state.schema import StateSchema, SchemaError
+from bumaren_agent_workflow.state.backends.memory import InMemoryStateStore
+from bumaren_agent_workflow.state.schema import StateSchema, SchemaError
 
 
 class GetTests(unittest.TestCase):

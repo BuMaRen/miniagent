@@ -1,8 +1,8 @@
 import unittest
 
-from engine.context import LifecycleHooks, RunContext
-from engine.primitives.foreach import ForEach
-from state.backends.memory import InMemoryStateStore
+from bumaren_agent_workflow.engine.context import LifecycleHooks, RunContext
+from bumaren_agent_workflow.engine.primitives.foreach import ForEach
+from bumaren_agent_workflow.state.backends.memory import InMemoryStateStore
 
 
 class _RecordingBody:

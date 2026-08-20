@@ -1,9 +1,9 @@
 import unittest
 
-from engine.context import ResumePoint, RunContext
-from engine.primitives.checkpoint import Checkpoint
-from engine.workflow import Workflow, WorkflowFailure
-from state.backends.memory import InMemoryStateStore
+from bumaren_agent_workflow.engine.context import ResumePoint, RunContext
+from bumaren_agent_workflow.engine.primitives.checkpoint import Checkpoint
+from bumaren_agent_workflow.engine.workflow import Workflow, WorkflowFailure
+from bumaren_agent_workflow.state.backends.memory import InMemoryStateStore
 
 
 def _ctx(**kwargs):

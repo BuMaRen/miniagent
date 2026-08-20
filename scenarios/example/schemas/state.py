@@ -1,4 +1,4 @@
-from state.schema import OneOf, StateSchema
+from bumaren_agent_workflow.state.schema import OneOf, StateSchema
 
 _TEST_CASE = {
     "id": str,

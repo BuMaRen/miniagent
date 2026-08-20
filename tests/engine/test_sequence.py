@@ -1,8 +1,8 @@
 import unittest
 
-from engine.context import RunContext
-from engine.primitives.sequence import Sequence
-from state.backends.memory import InMemoryStateStore
+from bumaren_agent_workflow.engine.context import RunContext
+from bumaren_agent_workflow.engine.primitives.sequence import Sequence
+from bumaren_agent_workflow.state.backends.memory import InMemoryStateStore
 
 
 class _AddNode:
