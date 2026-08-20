@@ -1,7 +1,7 @@
 import unittest
 
-from agent.toolset import ToolSet
-from tools.schema import ToolSchema
+from bumaren_agent_workflow.agent.toolset import ToolSet
+from bumaren_agent_workflow.tools.schema import ToolSchema
 
 
 def add(a: int, b: int) -> int:

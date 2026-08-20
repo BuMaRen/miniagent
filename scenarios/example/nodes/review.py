@@ -1,5 +1,5 @@
-from engine.stage import Node, Stage
-from llm.client import LLMClient
+from bumaren_agent_workflow.engine.stage import Node, Stage
+from bumaren_agent_workflow.llm.client import LLMClient
 from scenarios.example import prompts
 from scenarios.example.nodes.common import make_agent
 from scenarios.example.schemas.state import (

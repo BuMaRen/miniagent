@@ -1,11 +1,11 @@
 import unittest
 
-from engine.context import CheckpointRequest, LifecycleHooks, RunContext
-from engine.primitives.checkpoint import Checkpoint
-from engine.primitives.continuer import Continuer
-from engine.primitives.loop import Loop, LoopExceededError, OnExceed
-from state.backends.memory import InMemoryStateStore
-from state.schema import StateSchema
+from bumaren_agent_workflow.engine.context import CheckpointRequest, LifecycleHooks, RunContext
+from bumaren_agent_workflow.engine.primitives.checkpoint import Checkpoint
+from bumaren_agent_workflow.engine.primitives.continuer import Continuer
+from bumaren_agent_workflow.engine.primitives.loop import Loop, LoopExceededError, OnExceed
+from bumaren_agent_workflow.state.backends.memory import InMemoryStateStore
+from bumaren_agent_workflow.state.schema import StateSchema
 
 # 场景侧约定的判定字段名。极性是"真 = 还要再来一轮",所以叫 needs_revision
 # 而不是 passed(见 continuer.py 与 loop.py 的说明)。

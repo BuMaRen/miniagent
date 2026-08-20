@@ -1,6 +1,6 @@
 import unittest
 
-from tools.schema import ToolSchema, schema_from_func
+from bumaren_agent_workflow.tools.schema import ToolSchema, schema_from_func
 
 
 def sample_tool(x: int, y: str = "default") -> str:

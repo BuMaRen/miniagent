@@ -1,9 +1,9 @@
 from typing import Callable
 
-from engine.primitives import Breaker, Continuer, Sequence
-from engine.primitives.loop import Loop, OnExceed
-from engine.workflow import Workflow
-from llm.client import LLMClient
+from bumaren_agent_workflow.engine.primitives import Breaker, Continuer, Sequence
+from bumaren_agent_workflow.engine.primitives.loop import Loop, OnExceed
+from bumaren_agent_workflow.engine.workflow import Workflow
+from bumaren_agent_workflow.llm.client import LLMClient
 from scenarios.example.nodes.first_draft import build_first_draft_node
 from scenarios.example.nodes.redraft import build_redraft_node
 from scenarios.example.nodes.requirement_parse import build_requirement_parse_node

@@ -69,7 +69,7 @@ miniagent/
 框架层的单元测试在 `tests/`(镜像 `engine`/`agent`/`state`/`llm`/`tools` 的目录结构),只用标准库 `unittest`,无需额外依赖即可跑：
 
 ```
-python3 -m unittest discover -s tests -t .
+PYTHONPATH=src python3 -m unittest discover -s tests -t .
 ```
 
 `tests/llm/test_openai_provider.py`、`tests/llm/test_anthropic_provider.py`、`tests/llm/test_zhipu_provider.py` 覆盖三个 Provider 的消息格式转换;若未安装对应的 `openai`/`anthropic`/`zai-sdk`(`requirements.txt` 里的三个依赖),对应的文件会自动跳过而非报错。
@@ -80,6 +80,13 @@ python3 -m unittest discover -s tests -t .
 
 ```
 pip install bumaren-agent-workflow
+```
+
+Python 中使用组织前缀命名空间导入:
+
+```python
+from bumaren_agent_workflow import Agent, Workflow
+from bumaren_agent_workflow.engine.primitives import Sequence
 ```
 
 版本由 Git 标签自动生成;发布时推送形如 `v0.1.3` 的新标签即可:

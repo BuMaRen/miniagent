@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from state.backends.json_file import JsonFileStateStore
+from bumaren_agent_workflow.state.backends.json_file import JsonFileStateStore
 
 
 class JsonFileStateStoreTests(unittest.TestCase):

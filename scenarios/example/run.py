@@ -23,11 +23,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-from engine.context import LifecycleHooks, ResumePoint, RunContext
-from engine.workflow import WorkflowFailure
-from llm.client import LLMClient
-from llm.logging_client import LoggingLLMClient
-from state.backends.json_file import JsonFileStateStore
+from bumaren_agent_workflow.engine.context import LifecycleHooks, ResumePoint, RunContext
+from bumaren_agent_workflow.engine.workflow import WorkflowFailure
+from bumaren_agent_workflow.llm.client import LLMClient
+from bumaren_agent_workflow.llm.logging_client import LoggingLLMClient
+from bumaren_agent_workflow.state.backends.json_file import JsonFileStateStore
 
 from scenarios.example.schemas.state import empty_state
 from scenarios.example.workflow import build_workflow
@@ -115,7 +115,7 @@ def build_llm_client(model: str | None = None, log_dir: Path | None = None) -> L
     resolved_model = model or os.environ.get("TESTDESIGN_MODEL", _PROVIDER_DEFAULT_MODEL[provider])
 
     if provider == "anthropic":
-        from llm.providers.anthropic import AnthropicClient
+        from bumaren_agent_workflow.llm.providers.anthropic import AnthropicClient
 
         client: LLMClient = AnthropicClient(
             api_key=api_key,
@@ -124,7 +124,7 @@ def build_llm_client(model: str | None = None, log_dir: Path | None = None) -> L
             max_tokens=16384,
         )
     elif provider == "zhipu":
-        from llm.providers.zhipu import ZhipuClient
+        from bumaren_agent_workflow.llm.providers.zhipu import ZhipuClient
 
         client = ZhipuClient(
             api_key=api_key,
@@ -133,7 +133,7 @@ def build_llm_client(model: str | None = None, log_dir: Path | None = None) -> L
             max_tokens=16384,
         )
     else:
-        from llm.providers.openai import OpenAIClient
+        from bumaren_agent_workflow.llm.providers.openai import OpenAIClient
 
         client = OpenAIClient(
             api_key=api_key,

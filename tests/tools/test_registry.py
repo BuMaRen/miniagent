@@ -1,7 +1,7 @@
 import unittest
 
-from tools.registry import ToolRegistry, default_registry, tool
-from tools.schema import ToolSchema, schema_from_func
+from bumaren_agent_workflow.tools.registry import ToolRegistry, default_registry, tool
+from bumaren_agent_workflow.tools.schema import ToolSchema, schema_from_func
 
 
 def _dummy(x: int) -> int:

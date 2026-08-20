@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from state.schema import ANY, OneOf, SchemaError, StateSchema
+from bumaren_agent_workflow.state.schema import ANY, OneOf, SchemaError, StateSchema
 
 
 class ValidateTests(unittest.TestCase):

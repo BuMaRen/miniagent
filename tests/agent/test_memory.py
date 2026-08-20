@@ -1,7 +1,7 @@
 import unittest
 
-from agent.memory import ConversationMemory
-from llm.message import Message, ToolCall
+from bumaren_agent_workflow.agent.memory import ConversationMemory
+from bumaren_agent_workflow.llm.message import Message, ToolCall
 
 
 def _msg(role, content=None, tool_calls=None, tool_call_id=None):

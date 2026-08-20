@@ -1,6 +1,6 @@
 import unittest
 
-from llm.image_client import ImageClient, ImageResult, NotConfiguredImageClient
+from bumaren_agent_workflow.llm.image_client import ImageClient, ImageResult, NotConfiguredImageClient
 
 
 class NotConfiguredImageClientTests(unittest.TestCase):

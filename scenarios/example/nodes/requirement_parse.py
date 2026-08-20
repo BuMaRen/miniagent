@@ -1,4 +1,4 @@
-from engine import Node, Stage, RunContext
+from bumaren_agent_workflow.engine import Node, Stage, RunContext
 from scenarios.example.schemas.state import (
     REQUIREMENT_DOC_PATH,
     REQUIREMENT_PARSE_OUTPUT_SCHEMA,

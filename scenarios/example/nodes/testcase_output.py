@@ -1,9 +1,9 @@
 import json
 
-from engine.context import RunContext
-from engine.stage import Stage
+from bumaren_agent_workflow.engine.context import RunContext
+from bumaren_agent_workflow.engine.stage import Stage
 from scenarios.example.schemas.state import DRAFT_PATH, REVIEWED_PATH, DEPRECATED_PATH
-from engine import Node
+from bumaren_agent_workflow.engine import Node
 
 
 def build_testcase_output_node(output_path: str) -> Node:

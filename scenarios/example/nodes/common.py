@@ -1,6 +1,6 @@
-from llm.client import LLMClient
-from agent import ToolSet, Agent, ConversationMemory
-from tools.registry import ToolRegistry
+from bumaren_agent_workflow.llm.client import LLMClient
+from bumaren_agent_workflow.agent import ToolSet, Agent, ConversationMemory
+from bumaren_agent_workflow.tools.registry import ToolRegistry
 
 
 def make_agent(
