@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "buma-miniagent"
+version = "0.1.0"
+description = "A reusable, scenario-agnostic AI workflow framework."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "BuMaRen" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "openai==1.68.2",
+    "anthropic==0.120.0",
+    "zai-sdk==0.2.3",
+    "pyyaml==6.0.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/BuMaRen/miniagent"
+Repository = "https://github.com/BuMaRen/miniagent"
+Issues = "https://github.com/BuMaRen/miniagent/issues"
+
+[tool.setuptools.packages.find]
+include = ["agent*", "engine*", "llm*", "state*", "tools*"]

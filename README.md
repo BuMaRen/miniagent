@@ -74,6 +74,26 @@ python3 -m unittest discover -s tests -t .
 
 `tests/llm/test_openai_provider.py`、`tests/llm/test_anthropic_provider.py`、`tests/llm/test_zhipu_provider.py` 覆盖三个 Provider 的消息格式转换;若未安装对应的 `openai`/`anthropic`/`zai-sdk`(`requirements.txt` 里的三个依赖),对应的文件会自动跳过而非报错。
 
+## 安装
+
+发布到 PyPI 后,在其他项目中安装:
+
+```
+pip install buma-miniagent
+```
+
+发布前更新 `pyproject.toml` 中的版本号,然后推送同名的 Git 标签(例如版本为
+`0.1.0` 时推送 `v0.1.0`)。工作流会校验两者一致后再发布:
+
+```
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+首次发布前,在 PyPI 的 `Publishing` 页面添加一个 pending Trusted Publisher:
+owner 为 `BuMaRen`, repository 为 `miniagent`, workflow 为 `publish-pypi.yml`, environment
+为 `pypi`。后续发布无需保存 PyPI token 到 GitHub Secrets。
+
 ## 二次开发一个新场景
 
 参见 [scenarios/development-guide.md](scenarios/development-guide.md)。典型步骤:
