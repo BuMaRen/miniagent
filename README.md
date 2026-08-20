@@ -83,11 +83,11 @@ pip install buma-miniagent
 ```
 
 发布前更新 `pyproject.toml` 中的版本号,然后推送同名的 Git 标签(例如版本为
-`0.1.0` 时推送 `v0.1.0`)。工作流会校验两者一致后再发布:
+`0.1.1` 时推送 `v0.1.1`)。工作流会校验两者一致后再发布:
 
 ```
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 首次发布前,在 PyPI 的 `Publishing` 页面添加一个 pending Trusted Publisher:
@@ -113,4 +113,4 @@ owner 为 `BuMaRen`, repository 为 `miniagent`, workflow 为 `publish-pypi.yml`
 
 ## 状态
 
-v0.1.0:框架层(`tools/` → `llm/` → `state/` → `agent/` → `engine/`)与首个场景 `scenarios/example/`(测试用例设计工作流)均已实现,`tests/` 下有对应单元测试覆盖。
+v0.1.1:框架层(`tools/` → `llm/` → `state/` → `agent/` → `engine/`)与首个场景 `scenarios/example/`(测试用例设计工作流)均已实现,`tests/` 下有对应单元测试覆盖。
