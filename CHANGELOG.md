@@ -5,6 +5,11 @@
 
 ## [未发布]
 
+## [0.1.1] - 2026-08-20
+
+### 修复
+- 同步 `pyproject.toml` 中的包版本到 `0.1.1`，使 PyPI 发布工作流的标签校验与发布标签一致。
+
 ## [0.1.0] - 2026-08-06
 
 ### 新增
@@ -16,5 +21,6 @@
 - 场景开发指南 [`scenarios/development-guide.md`](scenarios/development-guide.md)。
 - 开源合规文件：`LICENSE`（MIT）、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`。
 
-[未发布]: https://github.com/BuMaRen/miniagent/compare/v0.1.0...HEAD
+[未发布]: https://github.com/BuMaRen/miniagent/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/BuMaRen/miniagent/releases/tag/v0.1.1
 [0.1.0]: https://github.com/BuMaRen/miniagent/releases/tag/v0.1.0
