@@ -112,4 +112,4 @@ owner 为 `BuMaRen`, repository 为 `miniagent`, workflow 为 `publish-pypi.yml`
 
 ## 状态
 
-v0.1.0:框架层(`tools/` → `llm/` → `state/` → `agent/` → `engine/`)与首个场景 `scenarios/example/`(测试用例设计工作流)均已实现,`tests/` 下有对应单元测试覆盖。
+v0.1.1:框架层(`tools/` → `llm/` → `state/` → `agent/` → `engine/`)与首个场景 `scenarios/example/`(测试用例设计工作流)均已实现,`tests/` 下有对应单元测试覆盖。
