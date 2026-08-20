@@ -70,6 +70,11 @@ class LoggingLLMClient(LLMClient):
             "response": {
                 "message": _message_to_dict(response.message),
                 "usage": response.usage,
+                # stop_reason 是排查"内容被截断"的关键信号(Anthropic 为
+                # "max_tokens",OpenAI 兼容协议为 finish_reason="length"):
+                # 不落这个字段的话,日志只能看到截断后的残缺文本,分不清是
+                # 模型自己写短了还是被 max_tokens 硬切断的。
+                "stop_reason": response.stop_reason,
             },
         }
         path = self._log_dir / f"chat_{index:04d}.json"

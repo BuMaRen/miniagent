@@ -99,7 +99,7 @@ class LLMClient(ABC):
             max_tokens: 本次请求实际生效的 max_tokens(已合并默认参数与调用方
                         传入的 params 之后的最终值);None 表示未设置该参数。
         """
-        return max_tokens is not None and max_tokens > STREAM_MAX_TOKENS_THRESHOLD
+        return max_tokens is not None and max_tokens >= STREAM_MAX_TOKENS_THRESHOLD
 
     def _chat_via_stream(
         self,
