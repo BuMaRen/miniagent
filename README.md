@@ -79,7 +79,7 @@ python3 -m unittest discover -s tests -t .
 发布到 PyPI 后,在其他项目中安装:
 
 ```
-pip install buma-miniagent
+pip install bumaren-agent-workflow
 ```
 
 版本由 Git 标签自动生成;发布时推送形如 `v0.1.3` 的新标签即可:
