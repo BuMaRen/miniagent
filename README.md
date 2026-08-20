@@ -82,12 +82,11 @@ python3 -m unittest discover -s tests -t .
 pip install buma-miniagent
 ```
 
-发布前更新 `pyproject.toml` 中的版本号,然后推送同名的 Git 标签(例如版本为
-`0.1.1` 时推送 `v0.1.1`)。工作流会校验两者一致后再发布:
+版本由 Git 标签自动生成;发布时推送形如 `v0.1.3` 的新标签即可:
 
 ```
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
 首次发布前,在 PyPI 的 `Publishing` 页面添加一个 pending Trusted Publisher:

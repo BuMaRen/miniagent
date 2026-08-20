@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "setuptools-scm[toml]>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "buma-miniagent"
-version = "0.1.1"
+dynamic = ["version"]
 description = "A reusable, scenario-agnostic AI workflow framework."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -35,3 +35,7 @@ Issues = "https://github.com/BuMaRen/miniagent/issues"
 
 [tool.setuptools.packages.find]
 include = ["agent*", "engine*", "llm*", "state*", "tools*"]
+
+[tool.setuptools_scm]
+version_scheme = "no-guess-dev"
+local_scheme = "no-local-version"
