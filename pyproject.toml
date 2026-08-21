@@ -26,6 +26,7 @@ dependencies = [
     "anthropic==0.120.0",
     "zai-sdk==0.2.3",
     "pyyaml==6.0.3",
+    "mcp==1.29.0",
 ]
 
 [project.urls]
