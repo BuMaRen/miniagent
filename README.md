@@ -47,7 +47,8 @@ miniagent/
 ├── tools/                      # 工具系统
 │   ├── schema.py               #   ToolSchema + schema_from_func(自动生成)
 │   ├── registry.py             #   ToolRegistry
-│   └── executor.py             #   ToolExecutor(安全执行 + 异常回填)
+│   ├── executor.py             #   ToolExecutor(安全执行 + 异常回填)
+│   └── mcp.py                  #   MCPServer:接入外部 MCP Server,打包成 ToolSet
 │
 └── scenarios/                  # 场景层:二次开发挂载点(见 scenarios/development-guide.md)
 ```
@@ -63,6 +64,25 @@ miniagent/
 3. **Loop 的退出与超限策略** — 是否重开下一轮/提前结束由放进 body 里的普通 Node 决定:`Continuer` 相当于 `continue`(跳过本轮剩余节点,从 body 头重开),`Breaker` 相当于 `break`(终止最近的外层 Loop/ForEach)。判定逻辑放在场景自己的 Node 里,引擎不认识任何业务字段名;超限则有 `accept_last / escalate_to_checkpoint / raise` 三种策略,杜绝死循环。
 4. **两种记忆分离** — `agent/memory.py` 是单次 Agent 运行内的短期对话记忆;`state/` 是跨 Stage 的长期结构化事实。用摘要保证连贯,用结构化状态保证事实一致,职责分开。
 5. **能力通过 ToolSet 挂载,而非改结构** — 换场景/做专业化的预期改动是"换一套 ToolSet + 换一份 State Schema",Stage/Loop/ForEach 的骨架不动。
+6. **外部 MCP Server 接入点是 ToolSet,不是新协议** — `tools/mcp.py` 的 `MCPServer` 把一个标准 MCP Server(如 `npx @playwright/mcp`)的工具列表转成 `ToolSet`,复用 `agent.load_toolset()` 同一条挂载路径;Agent/ToolExecutor 感知不到某个工具背后是本地函数还是远程 MCP 调用。MCP 官方 SDK 是 async 的,`MCPServer` 内部用一个后台线程常驻 event loop 做同步桥接,对外仍是同步 API。
+
+## 接入外部 MCP Server
+
+`tools/mcp.py` 的 `MCPServer` 用于把任意标准 MCP Server(stdio transport)接进来,例如 [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp):
+
+```python
+from bumaren_agent_workflow.tools.mcp import MCPServer
+
+with MCPServer.stdio(
+    "playwright",
+    command="npx",
+    args=["@playwright/mcp@latest"],
+) as server:
+    agent.load_toolset(server.toolset())
+    agent.run(ctx, inputs)
+```
+
+`server.toolset()` 会连接该 MCP Server、`list_tools()` 拿到它暴露的工具、逐个转成本框架的 `ToolSchema` 并包装成同步可调用函数,打包成一个可直接 `agent.load_toolset()` 的 `ToolSet`。也可以不用 `with`,手动 `server.connect()` / `server.close()` 管理连接生命周期(比如需要跨多个 Stage 复用同一个连接时)。
 
 ## 运行测试
 
@@ -72,7 +92,7 @@ miniagent/
 PYTHONPATH=src python3 -m unittest discover -s tests -t .
 ```
 
-`tests/llm/test_openai_provider.py`、`tests/llm/test_anthropic_provider.py`、`tests/llm/test_zhipu_provider.py` 覆盖三个 Provider 的消息格式转换;若未安装对应的 `openai`/`anthropic`/`zai-sdk`(`requirements.txt` 里的三个依赖),对应的文件会自动跳过而非报错。
+`tests/llm/test_openai_provider.py`、`tests/llm/test_anthropic_provider.py`、`tests/llm/test_zhipu_provider.py` 覆盖三个 Provider 的消息格式转换;`tests/tools/test_mcp.py` 用一个本地 stdio fixture server(`tests/tools/_mcp_fixture_server.py`,基于 `mcp.server.fastmcp.FastMCP`)验证 `MCPServer` 的连接/工具列举/调用/异常处理。若未安装对应的 `openai`/`anthropic`/`zai-sdk`/`mcp`(`requirements.txt` 里的依赖),对应的文件会自动跳过而非报错。
 
 ## 安装
 
